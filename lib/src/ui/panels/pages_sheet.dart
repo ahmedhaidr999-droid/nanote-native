@@ -155,7 +155,7 @@ class _PageRow extends StatelessWidget {
     return ListenableBuilder(
       listenable: engine.pageInk(meta.id),
       builder: (context, _) {
-        final ps = meta.sizeDef.size;
+        final ps = meta.effectiveSize;
         final thumbHeight = 56 * ps.height / ps.width;
         return ListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 12),
@@ -278,7 +278,7 @@ class _ThumbPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final ps = meta.sizeDef.size;
+    final ps = meta.effectiveSize;
     if (ps.width <= 0 || ps.height <= 0) return;
     final scale = size.width / ps.width;
     PageContentPainter(

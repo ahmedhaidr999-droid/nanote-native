@@ -73,7 +73,7 @@ class Filmstrip extends StatelessWidget {
   Widget _thumb(BuildContext context, PageMeta meta, int index) {
     final scheme = Theme.of(context).colorScheme;
     final colors = nanoteColors(context);
-    final ps = meta.sizeDef.size;
+    final ps = meta.effectiveSize;
     final thumbH = 56.0 * ps.height / ps.width;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
@@ -287,7 +287,7 @@ class _ThumbPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final ps = meta.sizeDef.size;
+    final ps = meta.effectiveSize;
     if (ps.width <= 0 || ps.height <= 0) return;
     final scale = size.width / ps.width;
     PageContentPainter(

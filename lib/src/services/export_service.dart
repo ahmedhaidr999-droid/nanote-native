@@ -40,7 +40,7 @@ class ExportService {
     final rendered = <ui.Image>[];
     try {
       for (final meta in engine.pages) {
-        final size = meta.sizeDef.size;
+        final size = meta.effectiveSize;
         final image = await _rasterPage(engine, meta, 2.0);
         rendered.add(image);
         final data = await image.toByteData(format: ui.ImageByteFormat.png);
@@ -92,7 +92,7 @@ class ExportService {
   /// The canvas is pre-scaled so painters keep working in 1x page units.
   static Future<ui.Image> _rasterPage(
       StrokeEngine engine, PageMeta page, double scale) async {
-    final size = page.sizeDef.size;
+    final size = page.effectiveSize;
     final ink = engine.pageInk(page.id);
     await _prewarmImages(ink);
 
