@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../../controllers/library_controller.dart';
 import '../../i18n/strings.dart';
@@ -12,14 +14,10 @@ import '../../theme/nanote_theme.dart';
 import 'library_dialogs.dart';
 import 'notebook_card.dart';
 
-/// Responsive breakpoints.
-const double _kSm = 600.0;
-const double _kMd = 900.0;
-const double _kLg = 1200.0;
-
-/// The library home screen ('/'): edge tab rail (or chip row on phones),
-/// folder breadcrumbs + chips, notebook grid/list, search, sort, view toggle,
-/// PDF import, trash section and the "new notebook" FAB.
+/// The library home screen ('/'): brand top bar with expandable search,
+/// bottom navigation (My Notebooks / Folders / Tags / Trash), folder
+/// breadcrumbs + chips, notebook grid/list, sort, view toggle, PDF import
+/// and the gradient "+" FAB.
 class LibraryView extends StatefulWidget {
   const LibraryView({super.key});
 
@@ -27,8 +25,23 @@ class LibraryView extends StatefulWidget {
   State<LibraryView> createState() => _LibraryViewState();
 }
 
+/// Sections of the bottom navigation bar.
+enum _LibTab { notebooks, folders, tags, trash }
+
 class _LibraryViewState extends State<LibraryView> {
   final TextEditingController _searchCtrl = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+
+  /// Active bottom-nav tab.
+  _LibTab _tab = _LibTab.notebooks;
+
+  /// Whether the top-bar search field is expanded.
+  bool _searchOpen = false;
+
+  /// All active (non-trashed) notebooks — powers the Folders tab list and
+  /// the per-folder / per-tag notebook counts.
+  List<NotebookEntity> _activeNotebooks = const [];
+  Map<int, int> _folderCounts = const {};
 
   @override
   void initState() {
@@ -38,12 +51,32 @@ class _LibraryViewState extends State<LibraryView> {
     unawaited(LibraryRepository.I.purgeExpiredTrash()
         .then((_) => LibraryController.I.reload())
         .catchError((_) {}));
+    LibraryController.I.addListener(_onLibraryChanged);
+    unawaited(_refreshLibraryCache());
   }
 
   @override
   void dispose() {
+    LibraryController.I.removeListener(_onLibraryChanged);
     _searchCtrl.dispose();
+    _searchFocus.dispose();
     super.dispose();
+  }
+
+  void _onLibraryChanged() => unawaited(_refreshLibraryCache());
+
+  Future<void> _refreshLibraryCache() async {
+    final all = await LibraryRepository.I.activeNotebooks();
+    if (!mounted) return;
+    final counts = <int, int>{};
+    for (final n in all) {
+      final fid = n.folderId;
+      if (fid != null) counts[fid] = (counts[fid] ?? 0) + 1;
+    }
+    setState(() {
+      _activeNotebooks = all;
+      _folderCounts = counts;
+    });
   }
 
   // ----------------------------------------------------------------- actions
@@ -64,6 +97,7 @@ class _LibraryViewState extends State<LibraryView> {
     if (c.section != LibrarySection.all) {
       await c.setSection(LibrarySection.all);
     }
+    if (!mounted) return;
     await Navigator.pushNamed(context, '/notebook', arguments: nb.id);
     if (mounted) unawaited(c.reload());
   }
@@ -85,6 +119,7 @@ class _LibraryViewState extends State<LibraryView> {
       if (c.section != LibrarySection.all) {
         await c.setSection(LibrarySection.all);
       }
+      if (!mounted) return;
       messenger.showSnackBar(SnackBar(content: Text(S.t('pdfImported'))));
       // Open the imported PDF right away.
       await Navigator.pushNamed(context, '/notebook', arguments: nb.id);
@@ -109,49 +144,51 @@ class _LibraryViewState extends State<LibraryView> {
     }
   }
 
-  /// The + menu: new note, new folder, or import a PDF.
+  /// The + menu: new notebook, import PDF or new folder.
   Future<void> _showCreateMenu() async {
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final isRtl = Directionality.of(context) == TextDirection.rtl;
-    // Anchored above the FAB (bottom-end in LTR, bottom-start in RTL).
-    final left = isRtl ? 16.0 : overlay.size.width - 292;
-    final right = isRtl ? overlay.size.width - 292 : 16.0;
-    final action = await showMenu<String>(
+    final action = await showModalBottomSheet<String>(
       context: context,
-      position: RelativeRect.fromLTRB(left, overlay.size.height - 268, right, 96),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      items: [
-        _menuItem('note', Icons.edit_note, 'newNotebook'),
-        _menuItem('folder', Icons.create_new_folder_outlined, 'newFolder'),
-        _menuItem('pdf', Icons.picture_as_pdf_outlined, 'importPdf'),
-      ],
+      backgroundColor: Colors.transparent,
+      showDragHandle: false,
+      builder: (context) => SafeArea(
+        child: NanoteSheet(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              sheetActionRow(
+                context,
+                icon: LucideIcons.book_plus,
+                label: S.t('newNotebook'),
+                onTap: () => Navigator.pop(context, 'notebook'),
+              ),
+              sheetActionRow(
+                context,
+                icon: LucideIcons.file_text,
+                label: S.t('importPdf'),
+                onTap: () => Navigator.pop(context, 'pdf'),
+              ),
+              sheetActionRow(
+                context,
+                icon: LucideIcons.folder_plus,
+                label: S.t('newFolder'),
+                onTap: () => Navigator.pop(context, 'folder'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
     );
     if (!mounted || action == null) return;
     switch (action) {
-      case 'note':
+      case 'notebook':
         await _createNotebook();
-      case 'folder':
-        await _createFolder();
       case 'pdf':
         await _importPdf();
+      case 'folder':
+        await _createFolder();
     }
-  }
-
-  PopupMenuItem<String> _menuItem(String value, IconData icon, String label) {
-    return PopupMenuItem<String>(
-      value: value,
-      height: 52,
-      child: Row(
-        children: [
-          Icon(icon, size: 22),
-          const SizedBox(width: 14),
-          Text(
-            S.t(label),
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-        ],
-      ),
-    );
   }
 
   // ------------------------------------------------------------------- build
@@ -162,391 +199,277 @@ class _LibraryViewState extends State<LibraryView> {
       listenable: LibraryController.I,
       builder: (context, _) {
         final c = LibraryController.I;
-        final wide = MediaQuery.of(context).size.width >= _kMd;
-        final content = Column(
-          children: [
-            if (!wide) _tabsRow(context, c),
-            if (c.section != LibrarySection.trash)
-              _folderBar(context, c)
-            else
-              _trashBanner(context, c),
-            Expanded(child: _body(context, c)),
-          ],
-        );
         return Scaffold(
           appBar: AppBar(
-            title: _searchField(context, c),
-            actions: [
-              _sortButton(context, c),
-              _viewToggle(c),
-              IconButton(
-                onPressed: () => Navigator.pushNamed(context, '/settings'),
-                icon: const Icon(Icons.settings_outlined),
-                tooltip: S.t('settings'),
-              ),
-              const SizedBox(width: 4),
-            ],
-          ),
-          body: wide
-              ? Row(
-                  children: [
-                    _tabRail(context, c),
-                    VerticalDivider(
-                        width: 1,
-                        color: Theme.of(context).colorScheme.outline),
-                    Expanded(child: content),
+            toolbarHeight: 56,
+            automaticallyImplyLeading: false,
+            title: _searchOpen
+                ? _searchField(context, c)
+                : _brandHeader(context),
+            actions: _searchOpen
+                ? [
+                    IconButton(
+                      icon: const Icon(LucideIcons.x, size: 20),
+                      tooltip: S.t('close'),
+                      onPressed: _closeSearch,
+                    ),
+                    const SizedBox(width: 4),
+                  ]
+                : [
+                    IconButton(
+                      icon: const Icon(LucideIcons.search, size: 20),
+                      tooltip: S.t('search'),
+                      onPressed: _openSearch,
+                    ),
+                    IconButton(
+                      icon: const Icon(LucideIcons.settings, size: 20),
+                      tooltip: S.t('settings'),
+                      onPressed: () =>
+                          Navigator.pushNamed(context, '/settings'),
+                    ),
+                    const SizedBox(width: 4),
                   ],
-                )
-              : content,
-          // The + button opens the create menu: note / folder / PDF import.
-          floatingActionButton: c.section == LibrarySection.trash
-              ? null
-              : _gradientFab(context),
+          ),
+          body: switch (_tab) {
+            _LibTab.notebooks => _notebooksTab(context, c),
+            _LibTab.folders => _foldersTab(context, c),
+            _LibTab.tags => _tagsTab(context, c),
+            _LibTab.trash => _trashTab(context, c),
+          },
+          bottomNavigationBar: _bottomNav(context),
+          // The + button opens the create menu: notebook / folder / PDF.
+          floatingActionButton:
+              _tab == _LibTab.trash ? null : _gradientFab(context),
         );
       },
     );
   }
 
-  /// Sky-gradient FAB — the app's lively hero element.
-  Widget _gradientFab(BuildContext context) {
-    final colors = nanoteColors(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: colors.brandGradient,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: colors.brandGradient.first.withValues(alpha: 0.45),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
+  // ---------------------------------------------------------------- top bar
+
+  /// Logo mark + wordmark, the START side of the top bar.
+  Widget _brandHeader(BuildContext context) {
+    final nc = nanoteColors(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: AlignmentDirectional.topStart,
+              end: AlignmentDirectional.bottomEnd,
+              colors: nc.brandGradient,
+            ),
+            borderRadius: BorderRadius.circular(NANOTE_RADIUS_MD),
           ),
-        ],
-      ),
-      child: FloatingActionButton(
-        elevation: 0,
-        highlightElevation: 0,
-        backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        tooltip: S.t('create'),
-        onPressed: () => unawaited(_showCreateMenu()),
-        child: const Icon(Icons.add, size: 30),
-      ),
+          child: const Icon(LucideIcons.pen_tool, size: 18, color: Colors.white),
+        ),
+        const SizedBox(width: 10),
+        const Text('Nanote'),
+      ],
     );
   }
 
-  // ---------------------------------------------------------------- top bar
+  void _openSearch() {
+    setState(() => _searchOpen = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocus.requestFocus();
+    });
+  }
 
+  void _closeSearch() {
+    _searchFocus.unfocus();
+    _searchCtrl.clear();
+    LibraryController.I.setQuery('');
+    setState(() => _searchOpen = false);
+  }
+
+  /// Pill search field (surfaceVariant fill, no border) shown in the top bar
+  /// while searching.
   Widget _searchField(BuildContext context, LibraryController c) {
+    final nc = nanoteColors(context);
+    final pillBorder = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(999),
+      borderSide: BorderSide.none,
+    );
     return SizedBox(
-      height: 44,
+      height: 42,
       child: TextField(
         controller: _searchCtrl,
+        focusNode: _searchFocus,
         onChanged: c.setQuery,
         decoration: InputDecoration(
           hintText: S.t('searchHint'),
           isDense: true,
-          prefixIcon: const Icon(Icons.search),
+          filled: true,
+          fillColor: nc.surfaceVariant,
+          prefixIcon: const Icon(LucideIcons.search, size: 20),
+          prefixIconConstraints:
+              const BoxConstraints(minWidth: 44, minHeight: 44),
           suffixIcon: c.query.isEmpty
               ? null
               : IconButton(
-                  icon: const Icon(Icons.close),
+                  icon: const Icon(LucideIcons.x, size: 20),
                   tooltip: S.t('clear'),
                   onPressed: () {
                     _searchCtrl.clear();
                     c.setQuery('');
                   },
                 ),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 0),
+          border: pillBorder,
+          enabledBorder: pillBorder,
+          focusedBorder: pillBorder,
         ),
       ),
     );
   }
 
-  Widget _sortButton(BuildContext context, LibraryController c) {
-    return PopupMenuButton<String>(
-      icon: const Icon(Icons.sort),
-      tooltip: S.t('sortBy'),
-      onSelected: (v) {
-        if (v == 'asc') {
-          c.setSort(c.sortKey, true);
-        } else if (v == 'desc') {
-          c.setSort(c.sortKey, false);
-        } else {
-          for (final k in SortKey.values) {
-            if (k.key == v) c.setSort(k, c.sortAsc);
-          }
-        }
-      },
-      itemBuilder: (context) => [
-        for (final k in SortKey.values)
-          PopupMenuItem(
-            value: k.key,
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 22,
-                  child: c.sortKey == k
-                      ? const Icon(Icons.check, size: 18)
-                      : null,
-                ),
-                Text(S.t(k.key)),
-              ],
-            ),
-          ),
-        const PopupMenuDivider(),
-        PopupMenuItem(
-          value: 'asc',
-          child: Row(
-            children: [
-              SizedBox(
-                width: 22,
-                child:
-                    c.sortAsc ? const Icon(Icons.check, size: 18) : null,
-              ),
-              Text(S.t('ascending')),
-            ],
-          ),
-        ),
-        PopupMenuItem(
-          value: 'desc',
-          child: Row(
-            children: [
-              SizedBox(
-                width: 22,
-                child:
-                    !c.sortAsc ? const Icon(Icons.check, size: 18) : null,
-              ),
-              Text(S.t('descending')),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+  // ------------------------------------------------------------ bottom nav
 
-  Widget _viewToggle(LibraryController c) {
-    return IconButton(
-      onPressed: () => c.setViewMode(
-        c.viewMode == ViewMode.grid ? ViewMode.list : ViewMode.grid,
-      ),
-      icon: Icon(
-        c.viewMode == ViewMode.grid ? Icons.view_list : Icons.grid_view,
-      ),
-      tooltip: S.t(c.viewMode == ViewMode.grid ? 'listView' : 'gridView'),
-    );
-  }
-
-  // ------------------------------------------------------------------- tabs
-
-  Widget _tabRail(BuildContext context, LibraryController c) {
-    return Material(
-      color: Theme.of(context).colorScheme.surface,
-      child: SizedBox(
-        width: 84,
-        child: Column(
-          children: [
-            const SizedBox(height: 8),
-            _railSectionButton(
-              context,
-              icon: Icons.apps,
-              label: S.t('all'),
-              selected:
-                  c.selectedTabId == null && c.section == LibrarySection.all,
-              onTap: () => c.selectTab(null),
-            ),
-            _railSectionButton(
-              context,
-              icon: c.section == LibrarySection.favorites
-                  ? Icons.star
-                  : Icons.star_border,
-              label: S.t('favorites'),
-              selected: c.section == LibrarySection.favorites,
-              onTap: () => c.setSection(LibrarySection.favorites),
-            ),
-            _railSectionButton(
-              context,
-              icon: Icons.delete_outline,
-              label: S.t('trash'),
-              selected: c.section == LibrarySection.trash,
-              onTap: () => c.setSection(LibrarySection.trash),
-            ),
-            const Divider(height: 16),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.only(bottom: 8),
-                children: [
-                  for (final t in c.tabs) _railTab(context, c, t),
-                  IconButton(
-                    onPressed: () => _showCreateTabDialog(context),
-                    icon: const Icon(Icons.add),
-                    tooltip: S.t('newTab'),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _railSectionButton(
-    BuildContext context, {
-    required IconData icon,
-    required String label,
-    required bool selected,
-    required VoidCallback onTap,
-  }) {
+  Widget _bottomNav(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final nc = nanoteColors(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      child: Material(
-        color: selected ? cs.primary : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(10),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon,
-                    size: 22,
-                    color: selected ? cs.onPrimary : cs.onSurface),
-                const SizedBox(height: 3),
-                Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    color: selected ? cs.onPrimary : nc.mutedFg,
-                  ),
-                ),
-              ],
+    final navTheme = Theme.of(context).navigationBarTheme.copyWith(
+          iconTheme: WidgetStateProperty.resolveWith(
+            (states) => IconThemeData(
+              color: states.contains(WidgetState.selected)
+                  ? cs.primary
+                  : nc.mutedFg,
             ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _railTab(BuildContext context, LibraryController c, TabEntity t) {
-    final selected =
-        c.selectedTabId == t.id && c.section == LibrarySection.all;
-    final cs = Theme.of(context).colorScheme;
-    final nc = nanoteColors(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      child: Material(
-        color: selected ? cs.primary : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-        child: InkWell(
-          onTap: () => c.selectTab(t.id),
-          onLongPress: () => _showTabMenu(context, t),
-          borderRadius: BorderRadius.circular(10),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(t.emoji, style: const TextStyle(fontSize: 18)),
-                const SizedBox(height: 2),
-                Text(
-                  t.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    color: selected ? cs.onPrimary : nc.mutedFg,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Container(
-                  width: 18,
-                  height: 3,
-                  decoration: BoxDecoration(
-                    color: Color(t.color),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ],
+          labelTextStyle: WidgetStateProperty.resolveWith(
+            (states) => nanoteText(
+              TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: states.contains(WidgetState.selected)
+                    ? cs.primary
+                    : nc.mutedFg,
+              ),
             ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _tabsRow(BuildContext context, LibraryController c) {
-    return SizedBox(
-      height: 56,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        children: [
-          _tabChip(
-            context,
-            icon: Icons.apps,
-            label: S.t('all'),
-            selected:
-                c.selectedTabId == null && c.section == LibrarySection.all,
-            onTap: () => c.selectTab(null),
+        );
+    return Theme(
+      data: Theme.of(context).copyWith(navigationBarTheme: navTheme),
+      child: NavigationBar(
+        height: 64,
+        selectedIndex: _tab.index,
+        onDestinationSelected: _onNavTap,
+        destinations: [
+          NavigationDestination(
+            icon: const Icon(LucideIcons.book, size: 24),
+            label: S.t('myNotebooks'),
           ),
-          const SizedBox(width: 6),
-          _tabChip(
-            context,
-            icon: c.section == LibrarySection.favorites
-                ? Icons.star
-                : Icons.star_border,
-            label: S.t('favorites'),
-            selected: c.section == LibrarySection.favorites,
-            onTap: () => c.setSection(LibrarySection.favorites),
+          NavigationDestination(
+            icon: const Icon(LucideIcons.folder, size: 24),
+            label: S.t('folders'),
           ),
-          const SizedBox(width: 6),
-          _tabChip(
-            context,
-            icon: Icons.delete_outline,
+          NavigationDestination(
+            icon: const Icon(LucideIcons.tag, size: 24),
+            label: S.t('tags'),
+          ),
+          NavigationDestination(
+            icon: const Icon(LucideIcons.trash, size: 24),
             label: S.t('trash'),
-            selected: c.section == LibrarySection.trash,
-            onTap: () => c.setSection(LibrarySection.trash),
-          ),
-          if (c.tabs.isNotEmpty) ...[
-            const SizedBox(width: 6),
-            Center(
-              child: Container(
-                width: 1,
-                height: 28,
-                color: Theme.of(context).colorScheme.outline,
-              ),
-            ),
-          ],
-          for (final t in c.tabs) ...[
-            const SizedBox(width: 6),
-            _userTabChip(context, c, t),
-          ],
-          const SizedBox(width: 6),
-          _tabChip(
-            context,
-            icon: Icons.add,
-            label: S.t('newTab'),
-            selected: false,
-            onTap: () => _showCreateTabDialog(context),
           ),
         ],
       ),
     );
   }
 
-  Widget _tabChip(
+  void _onNavTap(int index) {
+    final c = LibraryController.I;
+    final tab = _LibTab.values[index];
+    if (tab == _LibTab.trash) {
+      if (c.section != LibrarySection.trash) {
+        unawaited(c.setSection(LibrarySection.trash));
+      }
+    } else if (c.section == LibrarySection.trash) {
+      unawaited(c.setSection(LibrarySection.all));
+    }
+    setState(() => _tab = tab);
+  }
+
+  // ------------------------------------------------------------------- FAB
+
+  /// Gradient rounded-square "+" — the app's hero element.
+  Widget _gradientFab(BuildContext context) {
+    final nc = nanoteColors(context);
+    return Tooltip(
+      message: S.t('create'),
+      child: Pressable(
+        onTap: () => unawaited(_showCreateMenu()),
+        child: Container(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: AlignmentDirectional.topStart,
+              end: AlignmentDirectional.bottomEnd,
+              colors: nc.brandGradient,
+            ),
+            borderRadius: BorderRadius.circular(NANOTE_RADIUS_LG),
+            boxShadow: nc.inkShadow2,
+          ),
+          child: const Icon(LucideIcons.plus, size: 24, color: Colors.white),
+        ),
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------- notebooks tab
+
+  Widget _notebooksTab(BuildContext context, LibraryController c) {
+    return Column(
+      children: [
+        _sectionRow(context, c),
+        _folderBar(context, c),
+        Expanded(child: _body(context, c)),
+      ],
+    );
+  }
+
+  /// All / Favorites sections, the user's quick tabs and "new tab".
+  Widget _sectionRow(BuildContext context, LibraryController c) {
+    return SizedBox(
+      height: 56,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        children: [
+          _sectionChip(
+            context,
+            icon: LucideIcons.notebook,
+            label: S.t('all'),
+            selected:
+                c.selectedTabId == null && c.section == LibrarySection.all,
+            onTap: () => unawaited(c.selectTab(null)),
+          ),
+          const SizedBox(width: 8),
+          _sectionChip(
+            context,
+            icon: LucideIcons.star,
+            label: S.t('favorites'),
+            selected: c.section == LibrarySection.favorites,
+            onTap: () =>
+                unawaited(c.setSection(LibrarySection.favorites)),
+          ),
+          for (final t in c.tabs) ...[
+            const SizedBox(width: 8),
+            _userTabChip(context, c, t),
+          ],
+          const SizedBox(width: 8),
+          _newTabChip(context),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionChip(
     BuildContext context, {
     required IconData icon,
     required String label,
@@ -555,29 +478,32 @@ class _LibraryViewState extends State<LibraryView> {
   }) {
     final cs = Theme.of(context).colorScheme;
     final nc = nanoteColors(context);
-    return Material(
-      color: selected ? cs.primary : cs.secondary,
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            children: [
-              Icon(icon, size: 16, color: selected ? cs.onPrimary : nc.secondaryFg),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: selected ? cs.onPrimary : nc.secondaryFg,
-                ),
+    return Pressable(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? nc.accent : nc.surfaceVariant,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon,
+                size: 16, color: selected ? cs.primary : nc.mutedFg),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                color: selected ? cs.primary : nc.mutedFg,
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -588,39 +514,74 @@ class _LibraryViewState extends State<LibraryView> {
         c.selectedTabId == t.id && c.section == LibrarySection.all;
     final cs = Theme.of(context).colorScheme;
     final nc = nanoteColors(context);
-    return Material(
-      color: selected ? cs.primary : cs.secondary,
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        onTap: () => c.selectTab(t.id),
-        onLongPress: () => _showTabMenu(context, t),
-        borderRadius: BorderRadius.circular(999),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            children: [
-              Text(t.emoji, style: const TextStyle(fontSize: 14)),
-              const SizedBox(width: 6),
-              Text(
-                t.name,
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: selected ? cs.onPrimary : nc.secondaryFg,
-                ),
+    return Pressable(
+      onTap: () => unawaited(c.selectTab(t.id)),
+      onLongPress: () => _showTabMenu(context, t),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? nc.accent : nc.surfaceVariant,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(t.emoji, style: const TextStyle(fontSize: 14)),
+            const SizedBox(width: 6),
+            Text(
+              t.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                color: selected ? cs.primary : nc.mutedFg,
               ),
-              const SizedBox(width: 6),
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: Color(t.color),
-                  shape: BoxShape.circle,
-                ),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: Color(t.color),
+                shape: BoxShape.circle,
               ),
-            ],
-          ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _newTabChip(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final nc = nanoteColors(context);
+    return Pressable(
+      onTap: () => _showCreateTabDialog(context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: nc.surfaceVariant,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(LucideIcons.plus, size: 16, color: cs.primary),
+            const SizedBox(width: 6),
+            Text(
+              S.t('newTab'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: cs.primary,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -628,17 +589,30 @@ class _LibraryViewState extends State<LibraryView> {
 
   // ---------------------------------------------------------------- folders
 
+  /// Breadcrumbs + child folder chips + "new folder", with the sort and
+  /// view-toggle controls at the end.
   Widget _folderBar(BuildContext context, LibraryController c) {
     final children = c.childFolders(c.currentFolderId);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      child: Wrap(
-        spacing: 6,
-        runSpacing: 6,
+      padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 8, 4),
+      child: Row(
         children: [
-          if (c.currentFolderId != null) ..._breadcrumbChips(context, c),
-          for (final f in children) _folderChip(context, c, f),
-          _newFolderChip(context, c),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsetsDirectional.only(end: 4),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  if (c.currentFolderId != null) ..._breadcrumbChips(context, c),
+                  for (final f in children) _folderChip(context, c, f),
+                  _newFolderChip(context, c),
+                ],
+              ),
+            ),
+          ),
+          _sortButton(context, c),
+          _viewToggle(c),
         ],
       ),
     );
@@ -663,7 +637,7 @@ class _LibraryViewState extends State<LibraryView> {
     return [
       _folderPill(
         context,
-        emoji: '🏠',
+        icon: LucideIcons.house,
         label: S.t('rootFolder'),
         highlighted: false,
         onTap: () => c.enterFolder(null),
@@ -683,28 +657,37 @@ class _LibraryViewState extends State<LibraryView> {
 
   Widget _folderPill(
     BuildContext context, {
-    required String emoji,
+    String? emoji,
+    IconData? icon,
     required String label,
     required bool highlighted,
     VoidCallback? onTap,
   }) {
     final cs = Theme.of(context).colorScheme;
     final nc = nanoteColors(context);
-    return InkWell(
+    final fg = highlighted ? cs.primary : nc.secondaryFg;
+    return Pressable(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
+      enabled: onTap != null,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: highlighted ? cs.primary : cs.secondary,
+          color: highlighted ? nc.accent : nc.surfaceVariant,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: highlighted ? cs.primary : cs.outline),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(emoji, style: const TextStyle(fontSize: 14)),
-            const SizedBox(width: 4),
+            if (emoji != null) ...[
+              Text(emoji, style: const TextStyle(fontSize: 14)),
+              const SizedBox(width: 4),
+            ],
+            if (icon != null) ...[
+              Icon(icon, size: 14, color: fg),
+              const SizedBox(width: 4),
+            ],
             Flexible(
               child: Text(
                 label,
@@ -713,7 +696,7 @@ class _LibraryViewState extends State<LibraryView> {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: highlighted ? cs.onPrimary : nc.secondaryFg,
+                  color: fg,
                 ),
               ),
             ),
@@ -725,18 +708,17 @@ class _LibraryViewState extends State<LibraryView> {
 
   Widget _folderChip(
       BuildContext context, LibraryController c, FolderEntity f) {
-    final cs = Theme.of(context).colorScheme;
     final nc = nanoteColors(context);
-    return InkWell(
+    return Pressable(
       onTap: () => c.enterFolder(f.id),
       onLongPress: () => _showFolderMenu(context, f),
-      borderRadius: BorderRadius.circular(999),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: cs.secondary,
+          color: nc.surfaceVariant,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: cs.outline),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -756,7 +738,13 @@ class _LibraryViewState extends State<LibraryView> {
               ),
             ),
             const SizedBox(width: 2),
-            Icon(Icons.chevron_right, size: 14, color: nc.mutedFg),
+            Icon(
+              Directionality.of(context) == TextDirection.rtl
+                  ? LucideIcons.chevron_left
+                  : LucideIcons.chevron_right,
+              size: 14,
+              color: nc.mutedFg,
+            ),
           ],
         ),
       ),
@@ -765,12 +753,15 @@ class _LibraryViewState extends State<LibraryView> {
 
   Widget _newFolderChip(BuildContext context, LibraryController c) {
     final cs = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: () =>
-          showCreateFolderDialog(context, parentId: c.currentFolderId),
-      borderRadius: BorderRadius.circular(999),
+    return Pressable(
+      onTap: () => showCreateFolderDialog(
+        context,
+        parentId: c.currentFolderId,
+      ),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
@@ -780,12 +771,12 @@ class _LibraryViewState extends State<LibraryView> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.create_new_folder_outlined,
-                size: 14, color: cs.primary),
+            Icon(LucideIcons.folder_plus, size: 14, color: cs.primary),
             const SizedBox(width: 4),
             Text(
               S.t('newFolder'),
               maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
@@ -798,12 +789,115 @@ class _LibraryViewState extends State<LibraryView> {
     );
   }
 
+  // ------------------------------------------------------------ sort / view
+
+  Widget _sortButton(BuildContext context, LibraryController c) {
+    Widget check(bool on) => SizedBox(
+          width: 22,
+          child: on
+              ? const Icon(LucideIcons.check, size: 16)
+              : null,
+        );
+    return PopupMenuButton<String>(
+      icon: Icon(
+        c.sortAsc
+            ? LucideIcons.arrow_up_narrow_wide
+            : LucideIcons.arrow_down_wide_narrow,
+        size: 20,
+      ),
+      tooltip: S.t('sortBy'),
+      onSelected: (v) {
+        if (v == 'asc') {
+          c.setSort(c.sortKey, true);
+        } else if (v == 'desc') {
+          c.setSort(c.sortKey, false);
+        } else {
+          for (final k in SortKey.values) {
+            if (k.key == v) c.setSort(k, c.sortAsc);
+          }
+        }
+      },
+      itemBuilder: (context) => [
+        for (final k in SortKey.values)
+          PopupMenuItem(
+            value: k.key,
+            child: Row(
+              children: [
+                check(c.sortKey == k),
+                Text(S.t(k.key)),
+              ],
+            ),
+          ),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          value: 'asc',
+          child: Row(
+            children: [
+              check(c.sortAsc),
+              Text(S.t('ascending')),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'desc',
+          child: Row(
+            children: [
+              check(!c.sortAsc),
+              Text(S.t('descending')),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _viewToggle(LibraryController c) {
+    return IconButton(
+      onPressed: () => c.setViewMode(
+        c.viewMode == ViewMode.grid ? ViewMode.list : ViewMode.grid,
+      ),
+      icon: Icon(
+        c.viewMode == ViewMode.grid
+            ? LucideIcons.layout_list
+            : LucideIcons.layout_grid,
+        size: 20,
+      ),
+      tooltip: S.t(c.viewMode == ViewMode.grid ? 'listView' : 'gridView'),
+    );
+  }
+
+  /// The notebooks toolbar (sort + view toggle), end-aligned. Used by tabs
+  /// that show the notebook list but have no folder bar.
+  Widget _listToolbar(BuildContext context, LibraryController c) {
+    return Padding(
+      padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 8, 4),
+      child: Row(
+        children: [
+          const Spacer(),
+          _sortButton(context, c),
+          _viewToggle(c),
+        ],
+      ),
+    );
+  }
+
   // ------------------------------------------------------------------ trash
 
+  Widget _trashTab(BuildContext context, LibraryController c) {
+    return Column(
+      children: [
+        _trashBanner(context, c),
+        _listToolbar(context, c),
+        Expanded(child: _body(context, c)),
+      ],
+    );
+  }
+
   Widget _trashBanner(BuildContext context, LibraryController c) {
+    final cs = Theme.of(context).colorScheme;
     final nc = nanoteColors(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 16, 4),
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
@@ -816,8 +910,7 @@ class _LibraryViewState extends State<LibraryView> {
           children: [
             Row(
               children: [
-                Icon(Icons.delete_sweep_outlined,
-                    size: 18, color: nc.warning),
+                Icon(LucideIcons.trash, size: 16, color: nc.warning),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -827,31 +920,24 @@ class _LibraryViewState extends State<LibraryView> {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             SizedBox(
               width: double.infinity,
-              child: FilledButton.tonal(
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: cs.error,
+                  foregroundColor: cs.onError,
+                ),
                 onPressed: () async {
-                  final ok = await showDialog<bool>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: Text(S.t('emptyTrashNow')),
-                      content: Text(S.t('confirmEmptyTrash')),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context, false),
-                          child: Text(S.t('cancel')),
-                        ),
-                        FilledButton(
-                          onPressed: () => Navigator.pop(context, true),
-                          child: Text(S.t('delete')),
-                        ),
-                      ],
-                    ),
+                  final ok = await showConfirmDialog(
+                    context,
+                    title: S.t('emptyTrashNow'),
+                    message: S.t('confirmEmptyTrash'),
                   );
-                  if (ok == true) await c.emptyTrash();
+                  if (ok) await c.emptyTrash();
                 },
-                child: Text(S.t('emptyTrashNow')),
+                icon: const Icon(LucideIcons.flame, size: 20),
+                label: Text(S.t('emptyTrashNow')),
               ),
             ),
           ],
@@ -860,26 +946,383 @@ class _LibraryViewState extends State<LibraryView> {
     );
   }
 
+  // ----------------------------------------------------------- folders tab
+
+  Widget _foldersTab(BuildContext context, LibraryController c) {
+    final children = c.childFolders(c.currentFolderId);
+    final notebooksHere = [
+      for (final n in _activeNotebooks)
+        if (n.folderId == c.currentFolderId) n,
+    ];
+    final nc = nanoteColors(context);
+    return CustomScrollView(
+      slivers: [
+        if (c.currentFolderId != null)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 16, 0),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: _breadcrumbChips(context, c),
+              ),
+            ),
+          ),
+        SliverPadding(
+          padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 0),
+          sliver: SliverGrid(
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 190,
+              childAspectRatio: 1.35,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, i) => i < children.length
+                  ? _folderCard(context, c, children[i])
+                  : _newFolderCard(context, c),
+              childCount: children.length + 1,
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(16, 20, 16, 4),
+            child: Text(
+              S.t('notebooks'),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.3,
+                color: nc.mutedFg,
+              ),
+            ),
+          ),
+        ),
+        if (notebooksHere.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 16, 0),
+              child: Text(
+                S.t('emptyLibraryHint'),
+                style: TextStyle(fontSize: 13, color: nc.mutedFg),
+              ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 16, 0),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, i) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: NotebookCard(
+                    notebook: notebooksHere[i],
+                    pageCount: c.pageCountOf(notebooksHere[i].id) ?? 0,
+                    tags: c.tagsOf(notebooksHere[i]),
+                    onOpen: () => _openNotebook(notebooksHere[i].id),
+                    onFavorite: () =>
+                        c.toggleFavorite(notebooksHere[i]),
+                    onMenu: (nb) => showNotebookMenuSheet(context, nb),
+                    listMode: true,
+                  ),
+                ),
+                childCount: notebooksHere.length,
+              ),
+            ),
+          ),
+        const SliverToBoxAdapter(child: SizedBox(height: 108)),
+      ],
+    );
+  }
+
+  Widget _folderCard(
+      BuildContext context, LibraryController c, FolderEntity f) {
+    final nc = nanoteColors(context);
+    final color = Color(f.color);
+    final count = _folderCounts[f.id] ?? 0;
+    return Pressable(
+      onTap: () => unawaited(c.enterFolder(f.id)),
+      onLongPress: () => _showFolderMenu(context, f),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(f.emoji, style: const TextStyle(fontSize: 20)),
+                const Spacer(),
+                Icon(LucideIcons.folder, size: 16, color: color),
+              ],
+            ),
+            const Spacer(),
+            Text(
+              f.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(LucideIcons.book, size: 14, color: nc.mutedFg),
+                const SizedBox(width: 4),
+                Text(
+                  S.num(count),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: nc.mutedFg,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _newFolderCard(BuildContext context, LibraryController c) {
+    final cs = Theme.of(context).colorScheme;
+    return Pressable(
+      onTap: () => showCreateFolderDialog(
+        context,
+        parentId: c.currentFolderId,
+      ),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+          border: Border.all(
+            color: cs.primary.withValues(alpha: 0.45),
+            width: 1.2,
+          ),
+        ),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(LucideIcons.folder_plus, size: 24, color: cs.primary),
+              const SizedBox(height: 6),
+              Text(
+                S.t('newFolder'),
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: cs.primary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------- tags tab
+
+  Widget _tagsTab(BuildContext context, LibraryController c) {
+    final nc = nanoteColors(context);
+    if (c.tags.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  color: nc.surfaceVariant,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(LucideIcons.tag, size: 24, color: nc.mutedFg),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                S.t('untagged'),
+                textAlign: TextAlign.center,
+                style:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: () => showCreateTagSheet(context),
+                icon: const Icon(LucideIcons.plus, size: 20),
+                label: Text(S.t('newTag')),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 108),
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final t in c.tags) _tagChip(context, c, t),
+            _newTagChip(context),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _tagChip(BuildContext context, LibraryController c, TagEntity t) {
+    final nc = nanoteColors(context);
+    final color = Color(t.color);
+    var count = 0;
+    for (final n in _activeNotebooks) {
+      if (n.tagIds.contains(t.id)) count++;
+    }
+    return Pressable(
+      onTap: () => _filterByTag(t.name),
+      onLongPress: () => _confirmDeleteTag(context, c, t),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                t.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: nc.surfaceVariant,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                S.num(count),
+                style: TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w600,
+                  color: nc.mutedFg,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _newTagChip(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Pressable(
+      onTap: () => showCreateTagSheet(context),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: cs.primary.withValues(alpha: 0.5)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(LucideIcons.plus, size: 14, color: cs.primary),
+            const SizedBox(width: 4),
+            Text(
+              S.t('newTag'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: cs.primary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Filter the notebooks list by tag name through the existing search.
+  void _filterByTag(String name) {
+    final c = LibraryController.I;
+    _searchCtrl.text = name;
+    c.setQuery(name);
+    setState(() {
+      _searchOpen = true;
+      _tab = _LibTab.notebooks;
+    });
+  }
+
+  Future<void> _confirmDeleteTag(
+      BuildContext context, LibraryController c, TagEntity t) async {
+    final ok = await showConfirmDialog(
+      context,
+      title: S.t('delete'),
+      message: t.name,
+    );
+    if (ok) await c.deleteTag(t);
+  }
+
   // ------------------------------------------------------------------- body
 
   Widget _body(BuildContext context, LibraryController c) {
     if (c.notebooks.isEmpty) return _emptyState(context, c);
-    final width = MediaQuery.of(context).size.width;
     if (c.viewMode == ViewMode.grid) {
-      return GridView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
-        gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: width >= _kLg ? 300 : (width >= _kSm ? 260 : 220),
-          childAspectRatio: 0.56,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-        ),
-        itemCount: c.notebooks.length,
-        itemBuilder: (context, i) => _notebookCard(context, c, c.notebooks[i]),
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          const spacing = 16.0;
+          final avail = math.max(0.0, constraints.maxWidth - 32);
+          final cross = math.max(1, (avail / 160).ceil());
+          final cellW = (avail - spacing * (cross - 1)) / cross;
+          // 3:4 cover + ~54px of labels underneath.
+          final cellH = cellW * 4 / 3 + 54;
+          return GridView.builder(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 108),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: cross,
+              childAspectRatio: cellW / cellH,
+              crossAxisSpacing: spacing,
+              mainAxisSpacing: spacing,
+            ),
+            itemCount: c.notebooks.length,
+            itemBuilder: (context, i) =>
+                _notebookCard(context, c, c.notebooks[i]),
+          );
+        },
       );
     }
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 108),
       itemCount: c.notebooks.length,
       itemBuilder: (context, i) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
@@ -916,15 +1359,15 @@ class _LibraryViewState extends State<LibraryView> {
     if (c.section == LibrarySection.trash) {
       title = S.t('emptyTrash');
       hint = S.t('emptyTrashHint');
-      icon = Icons.delete_outline;
+      icon = LucideIcons.trash;
     } else if (c.query.trim().isNotEmpty) {
       title = S.t('noResults');
       hint = null;
-      icon = Icons.search;
+      icon = LucideIcons.search;
     } else {
       title = S.t('emptyLibrary');
       hint = S.t('emptyLibraryHint');
-      icon = Icons.auto_stories_outlined;
+      icon = LucideIcons.book_open;
     }
     return Center(
       child: Padding(
@@ -932,8 +1375,16 @@ class _LibraryViewState extends State<LibraryView> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 56, color: nc.mutedFg),
-            const SizedBox(height: 12),
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: nc.surfaceVariant,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, size: 24, color: nc.mutedFg),
+            ),
+            const SizedBox(height: 14),
             Text(
               title,
               textAlign: TextAlign.center,
@@ -952,7 +1403,7 @@ class _LibraryViewState extends State<LibraryView> {
               const SizedBox(height: 20),
               FilledButton.icon(
                 onPressed: _createNotebook,
-                icon: const Icon(Icons.add),
+                icon: const Icon(LucideIcons.plus, size: 20),
                 label: Text(S.t('newNotebook')),
               ),
             ],
@@ -992,13 +1443,14 @@ class _LibraryViewState extends State<LibraryView> {
                     for (final e in kEmojiChoices)
                       InkWell(
                         onTap: () => setD(() => emoji = e),
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(NANOTE_RADIUS_SM),
                         child: Container(
                           width: 40,
                           height: 40,
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius:
+                                BorderRadius.circular(NANOTE_RADIUS_SM),
                             border: Border.all(
                               color: emoji == e
                                   ? Theme.of(context).colorScheme.primary
@@ -1053,15 +1505,16 @@ class _LibraryViewState extends State<LibraryView> {
     final c = LibraryController.I;
     final action = await showModalBottomSheet<String>(
       context: context,
-      builder: (context) {
-        final destructive = Theme.of(context).colorScheme.error;
-        return SafeArea(
+      backgroundColor: Colors.transparent,
+      showDragHandle: false,
+      builder: (context) => SafeArea(
+        child: NanoteSheet(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+                padding: const EdgeInsetsDirectional.fromSTEB(20, 12, 20, 8),
                 child: Row(
                   children: [
                     Text(t.emoji, style: const TextStyle(fontSize: 22)),
@@ -1078,48 +1531,36 @@ class _LibraryViewState extends State<LibraryView> {
                   ],
                 ),
               ),
-              ListTile(
-                leading: const Icon(Icons.edit_outlined),
-                title: Text(S.t('rename')),
+              sheetActionRow(
+                context,
+                icon: LucideIcons.pencil,
+                label: S.t('rename'),
                 onTap: () => Navigator.pop(context, 'rename'),
               ),
-              ListTile(
-                leading: Icon(Icons.delete_outline, color: destructive),
-                title: Text(
-                  S.t('deleteTab'),
-                  style: TextStyle(color: destructive),
-                ),
+              sheetActionRow(
+                context,
+                icon: LucideIcons.trash,
+                label: S.t('deleteTab'),
+                destructive: true,
                 onTap: () => Navigator.pop(context, 'delete'),
               ),
               const SizedBox(height: 8),
             ],
           ),
-        );
-      },
+        ),
+      ),
     );
     if (action == null || !context.mounted) return;
     if (action == 'rename') {
       await showRenameDialog(
           context, t.name, 'renameTab', (s) => c.renameTab(t, s));
     } else if (action == 'delete') {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(S.t('deleteTab')),
-          content: Text(t.name),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(S.t('cancel')),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(S.t('delete')),
-            ),
-          ],
-        ),
+      final ok = await showConfirmDialog(
+        context,
+        title: S.t('deleteTab'),
+        message: t.name,
       );
-      if (ok == true) await c.deleteTab(t);
+      if (ok) await c.deleteTab(t);
     }
   }
 
@@ -1127,15 +1568,16 @@ class _LibraryViewState extends State<LibraryView> {
     final c = LibraryController.I;
     final action = await showModalBottomSheet<String>(
       context: context,
-      builder: (context) {
-        final destructive = Theme.of(context).colorScheme.error;
-        return SafeArea(
+      backgroundColor: Colors.transparent,
+      showDragHandle: false,
+      builder: (context) => SafeArea(
+        child: NanoteSheet(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+                padding: const EdgeInsetsDirectional.fromSTEB(20, 12, 20, 8),
                 child: Row(
                   children: [
                     Text(f.emoji, style: const TextStyle(fontSize: 22)),
@@ -1152,48 +1594,36 @@ class _LibraryViewState extends State<LibraryView> {
                   ],
                 ),
               ),
-              ListTile(
-                leading: const Icon(Icons.edit_outlined),
-                title: Text(S.t('rename')),
+              sheetActionRow(
+                context,
+                icon: LucideIcons.pencil,
+                label: S.t('rename'),
                 onTap: () => Navigator.pop(context, 'rename'),
               ),
-              ListTile(
-                leading: Icon(Icons.delete_outline, color: destructive),
-                title: Text(
-                  S.t('deleteFolder'),
-                  style: TextStyle(color: destructive),
-                ),
+              sheetActionRow(
+                context,
+                icon: LucideIcons.trash,
+                label: S.t('deleteFolder'),
+                destructive: true,
                 onTap: () => Navigator.pop(context, 'delete'),
               ),
               const SizedBox(height: 8),
             ],
           ),
-        );
-      },
+        ),
+      ),
     );
     if (action == null || !context.mounted) return;
     if (action == 'rename') {
       await showRenameDialog(
           context, f.name, 'renameFolder', (s) => c.renameFolder(f, s));
     } else if (action == 'delete') {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(S.t('deleteFolder')),
-          content: Text(S.t('confirmDeleteFolder')),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(S.t('cancel')),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(S.t('delete')),
-            ),
-          ],
-        ),
+      final ok = await showConfirmDialog(
+        context,
+        title: S.t('deleteFolder'),
+        message: S.t('confirmDeleteFolder'),
       );
-      if (ok == true) await c.deleteFolder(f);
+      if (ok) await c.deleteFolder(f);
     }
   }
 }

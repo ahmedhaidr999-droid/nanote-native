@@ -436,6 +436,24 @@ class StrokeEngine extends ChangeNotifier {
     }
   }
 
+  /// PDF notebooks own ONE page per PDF page. Notebooks created by older
+  /// app versions (or an interrupted import) can hold FEWER pages than the
+  /// PDF — the editor then shows only page 1 and dark, empty space below
+  /// ("only the first page exists" bug). This SELF-HEALS the page list on
+  /// open: every missing page is appended at the end. Extra notebook pages
+  /// beyond the PDF are kept (the user may have added them).
+  Future<void> syncPagesToPdfCount(int pdfPageCount) async {
+    final n = notebook;
+    if (n == null || n.pdfPath == null) return;
+    if (pdfPageCount <= 0) return;
+    final missing = pdfPageCount - pages.length;
+    if (missing <= 0) return;
+    for (var i = 0; i < missing; i++) {
+      // addPage(null) appends at the end and notifies pagesChanged.
+      await addPage();
+    }
+  }
+
   PageInk pageInk(int pageId) =>
       _inks.putIfAbsent(pageId, () => PageInk(pageId));
 

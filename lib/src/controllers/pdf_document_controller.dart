@@ -150,6 +150,12 @@ class PdfDocumentController extends ChangeNotifier {
         return false;
       }
     });
+    if (ok) {
+      // Wake every mounted tile: tiles that mounted while the document was
+      // still opening burn their 5 retries on `doc == null` and would
+      // otherwise stay blank until the next unrelated tick.
+      renderTick.value = renderTick.value + 1;
+    }
     notifyListeners();
     return ok;
   }

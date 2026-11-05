@@ -25,8 +25,16 @@ extension TemplateIdX on TemplateId {
   String get key => 'template.${name}';
 }
 
-/// Page sizes (logical px at 1x).
-enum PageSizeId { a4Portrait, a4Landscape, letterPortrait, letterLandscape }
+/// Page sizes (logical px at 1x). A5 was APPENDED (indices are persisted in
+/// the DB — never reorder or insert).
+enum PageSizeId {
+  a4Portrait,
+  a4Landscape,
+  letterPortrait,
+  letterLandscape,
+  a5Portrait,
+  a5Landscape,
+}
 
 class PageSizeDef {
   final PageSizeId id;
@@ -41,11 +49,16 @@ class PageSizeDef {
 const Map<PageSizeId, PageSizeDef> PAGE_SIZES = {
   PageSizeId.a4Portrait: PageSizeDef(PageSizeId.a4Portrait, 794, 1123),
   PageSizeId.a4Landscape: PageSizeDef(PageSizeId.a4Landscape, 1123, 794),
-  PageSizeId.letterPortrait: PageSizeDef(PageSizeId.letterPortrait, 816, 1054),
-  PageSizeId.letterLandscape: PageSizeDef(PageSizeId.letterLandscape, 1054, 816),
+  PageSizeId.letterPortrait:
+      PageSizeDef(PageSizeId.letterPortrait, 816, 1054),
+  PageSizeId.letterLandscape:
+      PageSizeDef(PageSizeId.letterLandscape, 1054, 816),
+  PageSizeId.a5Portrait: PageSizeDef(PageSizeId.a5Portrait, 559, 794),
+  PageSizeId.a5Landscape: PageSizeDef(PageSizeId.a5Landscape, 794, 559),
 };
 
-PageSizeDef pageSizeDef(PageSizeId id) => PAGE_SIZES[id] ?? PAGE_SIZES[PageSizeId.a4Portrait]!;
+PageSizeDef pageSizeDef(PageSizeId id) =>
+    PAGE_SIZES[id] ?? PAGE_SIZES[PageSizeId.a4Portrait]!;
 
 PageSizeId pageSizeIdFrom(int id) =>
     PageSizeId.values[id.clamp(0, PageSizeId.values.length - 1)];
@@ -162,23 +175,143 @@ extension TextFontIdX on TextFontId {
   String get key => 'font.${name}';
 }
 
-/// Built-in notebook covers — 8 gradient covers, drawn programmatically.
+// ---------------------------------------------------------------------------
+// Notebook covers — the 12 v1.9.1 covers (3:4 portrait).
+// ---------------------------------------------------------------------------
+
+/// How a cover paints.
+enum CoverStyle { gradient, flat, dots, lines }
+
 class CoverDef {
+  /// Stable id ('c1'..'c12' — persisted on notebooks, never rename).
   final String id;
+
+  /// i18n key for the cover name (`cover.<name>`).
+  final String nameKey;
+
+  final CoverStyle style;
+
+  /// Gradient stops (top-start → bottom-end, 160°). For [CoverStyle.flat]
+  /// this holds exactly one color.
   final List<Color> colors;
 
-  const CoverDef(this.id, this.colors);
+  /// Title/text color on top of the cover.
+  final Color textColor;
+
+  const CoverDef({
+    required this.id,
+    required this.nameKey,
+    required this.style,
+    required this.colors,
+    required this.textColor,
+  });
+
+  /// First color (flat fills + gradient start).
+  Color get baseColor => colors.first;
+
+  bool get hasPattern =>
+      style == CoverStyle.dots || style == CoverStyle.lines;
+
+  /// The 160° gradient (or a flat fill) for this cover.
+  Gradient buildGradient() {
+    if (style == CoverStyle.flat || colors.length == 1) {
+      return LinearGradient(colors: [colors.first, colors.first]);
+    }
+    return LinearGradient(
+      begin: const Alignment(-0.6, -1),
+      end: const Alignment(0.6, 1),
+      colors: colors,
+    );
+  }
 }
 
+/// The 12 built-in covers (v1.9.1). Ids stay 'c1'..'c12' — legacy notebooks
+/// keep whatever they had saved.
 const List<CoverDef> BUILTIN_COVERS = [
-  CoverDef('c1', [Color(0xFF0EA5E9), Color(0xFF22D3EE)]),
-  CoverDef('c2', [Color(0xFF0E7A5F), Color(0xFF6FE38B)]),
-  CoverDef('c3', [Color(0xFF9333EA), Color(0xFFC9A6FF)]),
-  CoverDef('c4', [Color(0xFFE5484D), Color(0xFFFF9F1C)]),
-  CoverDef('c5', [Color(0xFF0B2540), Color(0xFF3E6C9E)]),
-  CoverDef('c6', [Color(0xFFDB2777), Color(0xFFFF7EB6)]),
-  CoverDef('c7', [Color(0xFFCA8A04), Color(0xFFFFD84D)]),
-  CoverDef('c8', [Color(0xFF075985), Color(0xFF7DD3FC)]),
+  CoverDef(
+    id: 'c1',
+    nameKey: 'cover.nanoteBlue',
+    style: CoverStyle.gradient,
+    colors: [Color(0xFF2B7BFF), Color(0xFF1E6FF2), Color(0xFF0D47C4)],
+    textColor: Color(0xFFFFFFFF),
+  ),
+  CoverDef(
+    id: 'c2',
+    nameKey: 'cover.midnight',
+    style: CoverStyle.gradient,
+    colors: [Color(0xFF2B3A55), Color(0xFF16233A)],
+    textColor: Color(0xFFFFFFFF),
+  ),
+  CoverDef(
+    id: 'c3',
+    nameKey: 'cover.sunset',
+    style: CoverStyle.gradient,
+    colors: [Color(0xFFFF9F1C), Color(0xFFE5484D)],
+    textColor: Color(0xFFFFFFFF),
+  ),
+  CoverDef(
+    id: 'c4',
+    nameKey: 'cover.meadow',
+    style: CoverStyle.gradient,
+    colors: [Color(0xFF34C98B), Color(0xFF0E7A5F)],
+    textColor: Color(0xFFFFFFFF),
+  ),
+  CoverDef(
+    id: 'c5',
+    nameKey: 'cover.orchid',
+    style: CoverStyle.gradient,
+    colors: [Color(0xFFC9A6FF), Color(0xFF9333EA)],
+    textColor: Color(0xFFFFFFFF),
+  ),
+  CoverDef(
+    id: 'c6',
+    nameKey: 'cover.rosewater',
+    style: CoverStyle.gradient,
+    colors: [Color(0xFFFF7EB6), Color(0xFFDB2777)],
+    textColor: Color(0xFFFFFFFF),
+  ),
+  CoverDef(
+    id: 'c7',
+    nameKey: 'cover.paperWhite',
+    style: CoverStyle.flat,
+    colors: [Color(0xFFF7F9FC)],
+    textColor: Color(0xFF16233A),
+  ),
+  CoverDef(
+    id: 'c8',
+    nameKey: 'cover.kraft',
+    style: CoverStyle.flat,
+    colors: [Color(0xFFE8D5B5)],
+    textColor: Color(0xFF5A4632),
+  ),
+  CoverDef(
+    id: 'c9',
+    nameKey: 'cover.inkBlack',
+    style: CoverStyle.flat,
+    colors: [Color(0xFF16202E)],
+    textColor: Color(0xFFE8EEF7),
+  ),
+  CoverDef(
+    id: 'c10',
+    nameKey: 'cover.forest',
+    style: CoverStyle.flat,
+    colors: [Color(0xFF1F4E3D)],
+    textColor: Color(0xFFE8F5EE),
+  ),
+  CoverDef(
+    id: 'c11',
+    nameKey: 'cover.dots',
+    style: CoverStyle.dots,
+    colors: [Color(0xFF1E6FF2), Color(0xFF0D47C4)],
+    textColor: Color(0xFFFFFFFF),
+  ),
+  CoverDef(
+    id: 'c12',
+    nameKey: 'cover.lines',
+    style: CoverStyle.lines,
+    colors: [Color(0xFF16233A), Color(0xFF0E1622)],
+    textColor: Color(0xFFFFFFFF),
+  ),
 ];
 
 CoverDef? coverById(String? id) {
@@ -188,3 +321,29 @@ CoverDef? coverById(String? id) {
   }
   return null;
 }
+
+/// Folder colors (10) — folders only get the last two extra colors.
+const List<Color> FOLDER_COLORS = [
+  Color(0xFF1E6FF2),
+  Color(0xFF22A06B),
+  Color(0xFFFF9F1C),
+  Color(0xFFE5484D),
+  Color(0xFF9333EA),
+  Color(0xFFDB2777),
+  Color(0xFF0E7A5F),
+  Color(0xFF5A6B85),
+  Color(0xFFCA8A04),
+  Color(0xFF16233A),
+];
+
+/// Tag colors (8).
+const List<Color> TAG_COLORS = [
+  Color(0xFF1E6FF2),
+  Color(0xFF22A06B),
+  Color(0xFFFF9F1C),
+  Color(0xFFE5484D),
+  Color(0xFF9333EA),
+  Color(0xFFDB2777),
+  Color(0xFF0E7A5F),
+  Color(0xFF5A6B85),
+];

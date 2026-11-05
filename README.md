@@ -10,6 +10,47 @@ Full feature parity with the Nanote v1.9.1 web app, rebuilt native.
 <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
+## v2.2.0 — Nanote v1.9.1 design system + PDF continuity fix
+
+**PDF notebooks now show every page.** Opening a PDF notebook self-heals its
+page list to the PDF's page count (notebooks created by older versions — or
+an interrupted import — previously owned a single page, so the editor showed
+only page 1 and dark empty space below). The paper layer now always paints
+under the PDF tile (a pending or failed render can never leave a dark void),
+the pan bounds refresh on every repaint (a stale bounds could lock scrolling
+after the page list changed), per-page PDF aspect application can no longer
+drop resolved sizes, and tiles that burned their retries while the document
+was still opening are woken the moment it opens.
+
+**The v1.9.1 design system, applied across the whole app:**
+- **Colors**: Nanote Blue `#1E6FF2` (light) / `#6BA6FF` (dark) as the only
+  blue; ink-and-paper neutrals (`#F7F9FC`/`#0E1622` backgrounds), instant
+  light/dark switching, no indigo, no other blues.
+- **Type**: Inter for Latin (cv11 + ss01, tabular numbers) with Noto Sans
+  Arabic for Arabic glyphs — bundled, offline.
+- **Radius 8/10/12/16 + two ink shadows** (soft `ink-1`, floating `ink-2`),
+  pill CTAs, capsule dark toasts, press-scale 0.96/120ms on every tappable.
+- **Library**: 56px top bar (logo + search + settings), notebook grid with
+  3:4 covers and page-count chips, bottom navigation (My Notebooks /
+  Folders / Tags / Trash), gradient "+" capsule with the create menu
+  (notebook / import PDF / folder), folder & tag color palettes (10/8).
+- **12 notebook covers** (3:4): 6 gradients + 4 flat + 2 patterns (dots,
+  lines) with per-cover text colors; live preview in the create screen.
+- **Create screen**: live 3:4 cover preview (max 280px, start side on
+  tablets, top on phones), cover grid (12) · template (12) · paper size
+  (A4/A5/Letter + portrait/landscape) · paper color (8), pill CTA.
+- **Editor**: the tool rail is now a floating frosted capsule — bottom-center
+  horizontal on tablets/landscape, vertical on the phone edge — draggable by
+  its handle between docks. 44×44 rounded tiles, active tool in solid
+  primary, grouped with hairline separators.
+- **Panels**: 256px tool-settings popover (5-column color grids, segmented
+  controls, sliders with tabular values), restyled color picker (HSV wheel,
+  per-tool favorites, recents), pages manager (bordered thumbnails, page
+  badges, bookmark dots, dashed add-page tile), text/audio/translate/sticker
+  panels.
+- **Icons**: Lucide exclusively (thin 1.5–2 stroke, 14/16/20/24 sizes).
+- **Numerals**: Latin digits by default; Hindi (٠١٢٣) optional in Settings.
+
 ## v2.0.1 — Editor fixes
 
 - **Writing offset FIXED**: all pointer math now uses canvas-local coordinates

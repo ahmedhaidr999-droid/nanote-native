@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../../controllers/tool_controller.dart';
 import '../../i18n/strings.dart';
@@ -12,6 +13,10 @@ import '../../theme/nanote_theme.dart';
 /// Color picker for the CURRENT tool: palette (ink / highlighter / laser by
 /// scope), per-scope FAVORITE slots (tap to apply, star to save the picked
 /// color), the spectrum color wheel with a brightness slider, and recents.
+///
+/// v1.9.1 restyle: rounded-top-16 sheet with drag handle + 20px padding,
+/// 5-column rounded-lg swatch grid (44px targets), 8 favorite slots + star
+/// toggle, tabular hex readout and a pill Apply button.
 Future<void> showColorPopover(BuildContext context, ToolController tools) async {
   await showModalBottomSheet<void>(
     context: context,
@@ -21,14 +26,16 @@ Future<void> showColorPopover(BuildContext context, ToolController tools) async 
 }
 
 /// Palette for a color scope.
+///
+/// Laser palette (v1.9.1): destructive red default first — no blues/sky.
 List<Color> paletteFor(ColorScope scope) => switch (scope) {
       ColorScope.highlighter => HIGHLIGHTER_PALETTE,
       ColorScope.laser => const [
           Color(0xFFE5484D),
-          Color(0xFFF59E0B),
-          Color(0xFF10B981),
-          Color(0xFF0EA5E9),
-          Color(0xFF8B5CF6),
+          Color(0xFFFF9F1C),
+          Color(0xFF22A06B),
+          Color(0xFF9333EA),
+          Color(0xFFDB2777),
         ],
       ColorScope.pen => INK_PALETTE,
     };
@@ -105,57 +112,47 @@ class _ColorSheetState extends State<_ColorSheet> {
   @override
   Widget build(BuildContext context) {
     final tools = widget.tools;
-    final cs = nanoteColors(context);
     final scope = tools.colorScope;
     final palette = paletteFor(scope);
     return SafeArea(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        padding:
+            const EdgeInsetsDirectional.only(start: 20, end: 20, bottom: 20),
         child: AnimatedBuilder(
           animation: tools,
           builder: (context, _) => Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(S.t('color'), style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final c in palette)
-                    _swatch(
-                      context,
-                      color: c,
-                      selected: c.toARGB32() == _selected.toARGB32(),
-                      onTap: () => _apply(c),
-                    ),
-                ],
+              Text(
+                S.t('color'),
+                style: nanoteText(TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: Theme.of(context).colorScheme.onSurface,
+                )),
               ),
-              const SizedBox(height: 16),
-              _favoritesRow(context, cs),
-              const SizedBox(height: 16),
-              Text(S.t('customColor'),
-                  style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 14),
+              _swatchGrid(
+                context,
+                palette,
+                selected: _selected.toARGB32(),
+                onTap: _apply,
+              ),
+              const SizedBox(height: 18),
+              _favoritesRow(context),
+              const SizedBox(height: 18),
+              _sectionTitle(context, S.t('customColor')),
               const SizedBox(height: 8),
-              _wheelSection(context, cs),
+              _wheelSection(context),
               if (tools.recentColors.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Text(S.t('recentColors'),
-                    style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: 18),
+                _sectionTitle(context, S.t('recentColors')),
                 const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    for (final v in tools.recentColors)
-                      _swatch(
-                        context,
-                        color: Color(v),
-                        selected: v == _selected.toARGB32(),
-                        size: 32,
-                        onTap: () => _apply(Color(v)),
-                      ),
-                  ],
+                _swatchGrid(
+                  context,
+                  [for (final v in tools.recentColors) Color(v)],
+                  selected: _selected.toARGB32(),
+                  onTap: _apply,
                 ),
               ],
             ],
@@ -165,30 +162,43 @@ class _ColorSheetState extends State<_ColorSheet> {
     );
   }
 
+  Widget _sectionTitle(BuildContext context, String text) {
+    final cs = nanoteColors(context);
+    return Text(
+      text,
+      style: nanoteText(TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+        color: cs.mutedFg,
+      )),
+    );
+  }
+
   /// Per-scope favorites + star toggle for the picked color.
-  Widget _favoritesRow(BuildContext context, NanoteColors cs) {
+  Widget _favoritesRow(BuildContext context) {
     final tools = widget.tools;
     final favs = tools.favoritesOf(tools.colorScope);
     final isFav = favs.contains(_selected.toARGB32());
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(S.t('favorites'), style: Theme.of(context).textTheme.titleSmall),
+        _sectionTitle(context, S.t('favorites')),
         const SizedBox(height: 8),
         Row(
           children: [
             for (var i = 0; i < 8; i++)
-              Expanded(child: _favoriteSlot(context, i, favs, cs)),
+              Expanded(child: _favoriteSlot(context, i, favs)),
             const SizedBox(width: 6),
-            _starToggle(isFav, cs),
+            _starToggle(context, isFav),
           ],
         ),
       ],
     );
   }
 
-  Widget _starToggle(bool isFav, NanoteColors cs) {
+  Widget _starToggle(BuildContext context, bool isFav) {
     final scheme = Theme.of(context).colorScheme;
+    final cs = nanoteColors(context);
     return SizedBox(
       width: 44,
       height: 44,
@@ -196,45 +206,84 @@ class _ColorSheetState extends State<_ColorSheet> {
         padding: EdgeInsets.zero,
         tooltip: S.t(isFav ? 'removeFavorite' : 'addFavorite'),
         onPressed: _toggleFavorite,
-        icon: Icon(isFav ? Icons.star : Icons.star_border, size: 24),
+        icon: const Icon(LucideIcons.star, size: 22),
         color: isFav ? scheme.primary : cs.mutedFg,
       ),
     );
   }
 
+  /// Exactly-5-column grid of 36px rounded-lg swatches (44px targets).
+  Widget _swatchGrid(
+    BuildContext context,
+    List<Color> colors, {
+    required int selected,
+    required ValueChanged<Color> onTap,
+  }) {
+    Widget row(List<Color> chunk) => Row(
+          children: [
+            for (var j = 0; j < 5; j++)
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsetsDirectional.only(
+                    start: j == 0 ? 0 : 3,
+                    end: j == 4 ? 0 : 3,
+                  ),
+                  child: j < chunk.length
+                      ? _swatch(
+                          context,
+                          chunk[j],
+                          selected: chunk[j].toARGB32() == selected,
+                          onTap: () => onTap(chunk[j]),
+                        )
+                      : const SizedBox(height: 44),
+                ),
+              ),
+          ],
+        );
+    final rows = <Widget>[];
+    for (var i = 0; i < colors.length; i += 5) {
+      final end = i + 5 > colors.length ? colors.length : i + 5;
+      rows.add(row(colors.sublist(i, end)));
+      if (end < colors.length) rows.add(const SizedBox(height: 6));
+    }
+    return Column(children: rows);
+  }
+
   Widget _swatch(
-    BuildContext context, {
-    required Color color,
+    BuildContext context,
+    Color color, {
     required bool selected,
     required VoidCallback onTap,
-    double size = 40,
   }) {
-    final primary = Theme.of(context).colorScheme.primary;
-    return InkWell(
-      customBorder: const CircleBorder(),
+    final scheme = Theme.of(context).colorScheme;
+    final cs = nanoteColors(context);
+    return Pressable(
       onTap: onTap,
       child: SizedBox(
-        width: 44,
         height: 44,
         child: Center(
           child: Container(
-            width: size + (selected ? 8 : 4),
-            height: size + (selected ? 8 : 4),
+            width: 42,
+            height: 42,
+            alignment: Alignment.center,
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
+              borderRadius: BorderRadius.circular(NANOTE_RADIUS),
               border: Border.all(
-                width: selected ? 2.5 : 1,
-                color: selected ? primary : const Color(0x33000000),
+                width: 2,
+                color: selected
+                    ? cs.ring.withValues(alpha: 0.45)
+                    : Colors.transparent,
               ),
             ),
-            child: Center(
-              child: Container(
-                width: size - 2,
-                height: size - 2,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: color,
-                  border: Border.all(color: const Color(0x1A000000)),
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(NANOTE_RADIUS_MD),
+                border: Border.all(
+                  width: selected ? 2 : 1,
+                  color: selected ? scheme.primary : scheme.outline,
                 ),
               ),
             ),
@@ -244,12 +293,12 @@ class _ColorSheetState extends State<_ColorSheet> {
     );
   }
 
-  Widget _favoriteSlot(
-      BuildContext context, int i, List<int> favs, NanoteColors cs) {
+  Widget _favoriteSlot(BuildContext context, int i, List<int> favs) {
     final has = i < favs.length;
     final color = has ? Color(favs[i]) : null;
-    return InkWell(
-      customBorder: const CircleBorder(),
+    final scheme = Theme.of(context).colorScheme;
+    final cs = nanoteColors(context);
+    return Pressable(
       onTap: has ? () => _apply(color!) : _toggleFavorite,
       child: SizedBox(
         height: 44,
@@ -258,23 +307,24 @@ class _ColorSheetState extends State<_ColorSheet> {
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
+              borderRadius: BorderRadius.circular(NANOTE_RADIUS_MD),
               color: color,
               border: Border.all(
-                width: 1.5,
-                color: has ? const Color(0x33000000) : cs.mutedFg,
+                width: has ? 1 : 1.4,
+                color: has ? scheme.outline : cs.mutedFg.withValues(alpha: 0.7),
               ),
             ),
             child: has
                 ? null
-                : Icon(Icons.add, size: 18, color: cs.mutedFg),
+                : Icon(LucideIcons.plus, size: 16, color: cs.mutedFg),
           ),
         ),
       ),
     );
   }
 
-  Widget _wheelSection(BuildContext context, NanoteColors cs) {
+  Widget _wheelSection(BuildContext context) {
+    final cs = nanoteColors(context);
     final side =
         (MediaQuery.of(context).size.width * 0.42).clamp(150.0, 210.0).toDouble();
     return Row(
@@ -298,15 +348,19 @@ class _ColorSheetState extends State<_ColorSheet> {
                     height: 44,
                     decoration: BoxDecoration(
                       color: _hsv.toColor(),
-                      borderRadius: BorderRadius.circular(NANOTE_RADIUS),
-                      border: Border.all(color: const Color(0x33000000)),
+                      borderRadius: BorderRadius.circular(NANOTE_RADIUS_MD),
+                      border: Border.all(color: cs.mutedFg.withValues(alpha: 0.4)),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
                       _hex(_selected),
-                      style: TextStyle(color: cs.mutedFg, fontSize: 13),
+                      style: nanoteText(TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: cs.mutedFg,
+                      )),
                     ),
                   ),
                 ],
@@ -314,7 +368,7 @@ class _ColorSheetState extends State<_ColorSheet> {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Icon(Icons.brightness_6, size: 18, color: cs.mutedFg),
+                  Icon(LucideIcons.sun_medium, size: 18, color: cs.mutedFg),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Slider(
@@ -331,7 +385,7 @@ class _ColorSheetState extends State<_ColorSheet> {
               const SizedBox(height: 4),
               FilledButton.icon(
                 onPressed: () => _apply(_hsv.toColor()),
-                icon: const Icon(Icons.check),
+                icon: const Icon(LucideIcons.check, size: 16),
                 label: Text(S.t('done')),
               ),
             ],

@@ -121,10 +121,11 @@ class ToolController extends ChangeNotifier {
   static int _defaultColorFor(StrokeKind kind) {
     switch (kind) {
       case StrokeKind.ballpoint:
-        return 0xFF0284C7;
+        return 0xFF16233A; // ink
       case StrokeKind.highlighter:
         return 0xFFFFD84D;
       case StrokeKind.fountain:
+        return 0xFF1E6FF2; // Nanote Blue
       case StrokeKind.brush:
       case StrokeKind.fineliner:
         return 0xFF16233A;
@@ -178,10 +179,10 @@ class ToolController extends ChangeNotifier {
   EraserMode _eraserMode = EraserMode.stroke;
 
   /// Page-space eraser radius.
-  double eraserRadius = 28;
+  double eraserRadius = 24;
 
   /// Eraser size presets (page-space radius).
-  static const List<double> eraserPresets = [12, 28, 48];
+  static const List<double> eraserPresets = [12, 24, 48];
 
   EraserMode get eraserMode => _eraserMode;
 

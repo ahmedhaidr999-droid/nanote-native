@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../../controllers/pen_bus.dart';
 import '../../controllers/settings_controller.dart';
@@ -23,38 +24,81 @@ class _PenManagerViewState extends State<PenManagerView> {
     return Scaffold(
       appBar: AppBar(title: Text(S.t('penManager'))),
       body: ListView(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 24),
         children: [
           _connectedPenCard(context),
-          const SizedBox(height: 12),
           _testPadCard(context),
-          const SizedBox(height: 12),
           ListenableBuilder(
             listenable: SettingsController.I,
             builder: (context, _) {
               final s = SettingsController.I.settings;
-              return Card(
-                margin: EdgeInsets.zero,
-                clipBehavior: Clip.antiAlias,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    SwitchListTile(
-                      value: s.penShortcutsEnabled,
-                      onChanged: (v) =>
-                          SettingsController.I.setPenShortcutsEnabled(v),
-                      title: Text(S.t('shortcutsMaster')),
-                      subtitle: Text(S.t('shortcuts')),
-                    ),
-                    for (final button in PenButton.values)
-                      _shortcutCard(context, s, button),
-                    const SizedBox(height: 8),
-                  ],
-                ),
+              return _card(
+                context,
+                icon: LucideIcons.sliders_horizontal,
+                title: S.t('shortcuts'),
+                children: [
+                  const SizedBox(height: 6),
+                  _switchRow(
+                    context,
+                    icon: LucideIcons.pen_line,
+                    title: S.t('shortcutsMaster'),
+                    subtitle: S.t('shortcuts'),
+                    value: s.penShortcutsEnabled,
+                    onChanged: (v) =>
+                        SettingsController.I.setPenShortcutsEnabled(v),
+                  ),
+                  for (final button in PenButton.values)
+                    _shortcutSection(context, s, button),
+                  const SizedBox(height: 8),
+                ],
               );
             },
           ),
-          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------- section card
+
+  Widget _card(
+    BuildContext context, {
+    IconData? icon,
+    required String title,
+    required List<Widget> children,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    final nc = nanoteColors(context);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(NANOTE_RADIUS_LG),
+        border: Border.all(color: cs.outline),
+        boxShadow: nc.inkShadow1,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (icon != null) ...[
+                Icon(icon, size: 15, color: nc.mutedFg),
+                const SizedBox(width: 7),
+              ],
+              Text(
+                title,
+                style: nanoteText(TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                  color: nc.mutedFg,
+                )),
+              ),
+            ],
+          ),
+          ...children,
         ],
       ),
     );
@@ -64,65 +108,71 @@ class _PenManagerViewState extends State<PenManagerView> {
 
   Widget _connectedPenCard(BuildContext context) {
     final nc = nanoteColors(context);
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(S.t('penConnected'),
-                style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 4),
-            ValueListenableBuilder<PenInfo?>(
-              valueListenable: PenBus.I.notifier,
-              builder: (context, pen, _) {
-                if (pen == null) {
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      S.t('noPenDetected'),
-                      style: TextStyle(fontSize: 13, color: nc.mutedFg),
-                    ),
-                  );
-                }
-                return Column(
+    return _card(
+      context,
+      icon: LucideIcons.activity,
+      title: S.t('penConnected'),
+      children: [
+        const SizedBox(height: 6),
+        ValueListenableBuilder<PenInfo?>(
+          valueListenable: PenBus.I.notifier,
+          builder: (context, pen, _) {
+            if (pen == null) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
                   children: [
-                    _infoRow(context, S.t('penKind'), pen.kind.name),
-                    _infoRow(context, S.t('pressure'),
-                        '${S.num((pen.pressure * 100).round())}%'),
-                    _infoRow(
-                        context,
-                        S.t('tilt'),
-                        '${((pen.tilt * 180 / 3.141592653589793)).toStringAsFixed(0)}° / '
-                        '${((pen.orientation * 180 / 3.141592653589793)).toStringAsFixed(0)}°'),
-                    _infoRow(
-                        context, S.t('buttons'), _penButtonsLabel(pen.buttons)),
-                    _infoRow(context, S.t('reportRate'),
-                        '${S.num(pen.reportRateHz.round())} Hz'),
+                    Icon(LucideIcons.pen, size: 15, color: nc.mutedFg),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        S.t('noPenDetected'),
+                        style: nanoteText(TextStyle(
+                            fontSize: 13,
+                            height: 1.35,
+                            color: nc.mutedFg)),
+                      ),
+                    ),
                   ],
-                );
-              },
-            ),
-          ],
+                ),
+              );
+            }
+            return Column(
+              children: [
+                _infoRow(context, S.t('penKind'), pen.kind.name),
+                _infoRow(context, S.t('pressure'),
+                    '${S.num((pen.pressure * 100).round())}%'),
+                _infoRow(
+                    context,
+                    S.t('tilt'),
+                    '${S.num((pen.tilt * 180 / 3.141592653589793).toStringAsFixed(0))}° / '
+                    '${S.num((pen.orientation * 180 / 3.141592653589793).toStringAsFixed(0))}°'),
+                _infoRow(
+                    context, S.t('buttons'), _penButtonsLabel(pen.buttons)),
+                _infoRow(context, S.t('reportRate'),
+                    '${S.num(pen.reportRateHz.round())} Hz'),
+              ],
+            );
+          },
         ),
-      ),
+      ],
     );
   }
 
   Widget _infoRow(BuildContext context, String label, String value) {
     final nc = nanoteColors(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
           Expanded(
-            child: Text(label, style: TextStyle(fontSize: 13, color: nc.mutedFg)),
+            child: Text(label,
+                style: nanoteText(
+                    TextStyle(fontSize: 12.5, color: nc.mutedFg))),
           ),
           Text(value,
-              style: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600)),
+              style: nanoteText(const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600))),
         ],
       ),
     );
@@ -132,79 +182,160 @@ class _PenManagerViewState extends State<PenManagerView> {
 
   Widget _testPadCard(BuildContext context) {
     final nc = nanoteColors(context);
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(S.t('testPad'),
-                style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 4),
-            Text(S.t('testPadHint'),
-                style: TextStyle(fontSize: 11, color: nc.mutedFg)),
-            const SizedBox(height: 12),
-            const _TestPad(),
-          ],
-        ),
-      ),
+    return _card(
+      context,
+      icon: LucideIcons.brush,
+      title: S.t('testPad'),
+      children: [
+        const SizedBox(height: 4),
+        Text(S.t('testPadHint'),
+            style: nanoteText(
+                TextStyle(fontSize: 11, height: 1.3, color: nc.mutedFg))),
+        const SizedBox(height: 12),
+        const _TestPad(),
+      ],
     );
   }
 
   // ------------------------------------------------------------- shortcuts
 
-  Widget _shortcutCard(BuildContext context, AppSettings s, PenButton button) {
+  Widget _shortcutSection(
+      BuildContext context, AppSettings s, PenButton button) {
+    final nc = nanoteColors(context);
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Divider(height: 1, indent: 16, endIndent: 16),
+        const Divider(height: 17, thickness: 1, indent: 4, endIndent: 4),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+          padding: const EdgeInsetsDirectional.only(start: 4, bottom: 4),
           child: Text(
             S.t(button.key),
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+            style: nanoteText(TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: nc.mutedFg,
+            )),
           ),
         ),
         for (final pattern in PenPattern.values)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
+            padding: const EdgeInsets.symmetric(vertical: 5),
             child: Row(
               children: [
                 Expanded(
                   child: Text(
                     S.t(pattern.key),
-                    style: const TextStyle(fontSize: 13),
+                    style: nanoteText(const TextStyle(fontSize: 13)),
                   ),
                 ),
-                DropdownButton<PenAction>(
-                  value: s.actionFor(button, pattern),
-                  items: [
-                    for (final action in PenAction.values)
-                      DropdownMenuItem(
-                        value: action,
-                        child: SizedBox(
-                          width: 190,
-                          child: Text(
-                            S.t(action.key),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ),
-                  ],
-                  onChanged: (action) {
-                    if (action != null) {
-                      SettingsController.I.setPenAction(
-                          button, pattern, action);
-                    }
-                  },
-                ),
+                const SizedBox(width: 8),
+                _actionDropdown(context, s, button, pattern),
               ],
             ),
           ),
       ],
+    );
+  }
+
+  Widget _actionDropdown(
+      BuildContext context, AppSettings s, PenButton button, PenPattern pattern) {
+    final cs = Theme.of(context).colorScheme;
+    final nc = nanoteColors(context);
+    return Container(
+      height: 40,
+      alignment: AlignmentDirectional.centerStart,
+      padding: const EdgeInsetsDirectional.only(start: 10, end: 6),
+      decoration: BoxDecoration(
+        color: nc.surfaceVariant,
+        borderRadius: BorderRadius.circular(NANOTE_RADIUS_MD),
+        border: Border.all(color: cs.outline),
+      ),
+      child: DropdownButton<PenAction>(
+        value: s.actionFor(button, pattern),
+        isDense: true,
+        underline: const SizedBox.shrink(),
+        borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+        dropdownColor: cs.surface,
+        icon: Icon(LucideIcons.chevron_down, size: 16, color: nc.mutedFg),
+        padding: EdgeInsets.zero,
+        style: nanoteText(
+            TextStyle(fontSize: 13, color: cs.onSurface)),
+        items: [
+          for (final action in PenAction.values)
+            DropdownMenuItem(
+              value: action,
+              child: SizedBox(
+                width: 190,
+                child: Text(
+                  S.t(action.key),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+        ],
+        onChanged: (action) {
+          if (action != null) {
+            SettingsController.I.setPenAction(button, pattern, action);
+          }
+        },
+      ),
+    );
+  }
+
+  Widget _switchRow(
+    BuildContext context, {
+    IconData? icon,
+    required String title,
+    String? subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    final nc = nanoteColors(context);
+    return InkWell(
+      onTap: () => onChanged(!value),
+      borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+        child: Row(
+          children: [
+            if (icon != null) ...[
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: nc.accent,
+                  borderRadius: BorderRadius.circular(NANOTE_RADIUS_MD),
+                ),
+                child: Icon(icon, size: 17, color: cs.primary),
+              ),
+              const SizedBox(width: 12),
+            ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: nanoteText(const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600))),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: nanoteText(TextStyle(
+                          fontSize: 12,
+                          height: 1.3,
+                          color: nc.mutedFg)),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            Switch(value: value, onChanged: onChanged),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -329,9 +460,9 @@ class _TestPadState extends State<_TestPad> {
                   ),
                 ),
               ),
-              Positioned(
+              PositionedDirectional(
                 top: 8,
-                left: 8,
+                start: 8,
                 child: IgnorePointer(
                   child: AnimatedOpacity(
                     opacity: _hover ? 1 : 0,
@@ -346,15 +477,15 @@ class _TestPadState extends State<_TestPad> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.gps_fixed,
+                          Icon(LucideIcons.crosshair,
                               size: 12, color: nc.accentFg),
                           const SizedBox(width: 4),
                           Text('hover',
-                              style: TextStyle(
+                              style: nanoteText(TextStyle(
                                 fontSize: 10,
                                 fontWeight: FontWeight.w700,
                                 color: nc.accentFg,
-                              )),
+                              ))),
                         ],
                       ),
                     ),
@@ -396,8 +527,8 @@ class _TestPadState extends State<_TestPad> {
                     style: TextStyle(fontSize: 11, color: nc.mutedFg)),
                 const SizedBox(height: 6),
                 Text(
-                  '${(((last?.orientation ?? 0) * 180 / 3.141592653589793).toStringAsFixed(0))}° / '
-                  '${(((last?.tilt ?? 0) * 180 / 3.141592653589793).toStringAsFixed(0))}°',
+                  '${S.num(((last?.orientation ?? 0) * 180 / 3.141592653589793).toStringAsFixed(0))}° / '
+                  '${S.num(((last?.tilt ?? 0) * 180 / 3.141592653589793).toStringAsFixed(0))}°',
                   style: const TextStyle(
                       fontSize: 12, fontWeight: FontWeight.w600),
                 ),
@@ -435,7 +566,7 @@ class _TestPadState extends State<_TestPad> {
             ),
             TextButton.icon(
               onPressed: () => setState(_strokes.clear),
-              icon: const Icon(Icons.delete_outline, size: 18),
+              icon: const Icon(LucideIcons.eraser, size: 16),
               label: Text(S.t('clearPad')),
             ),
           ],

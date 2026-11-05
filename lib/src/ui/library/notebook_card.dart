@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../../controllers/library_controller.dart';
 import '../../i18n/strings.dart';
@@ -8,15 +9,16 @@ import '../../models/paper.dart';
 import '../../persistence/file_store.dart';
 import '../../persistence/library_repository.dart';
 import '../../theme/nanote_theme.dart';
+import '../widgets/cover_art.dart';
 
 /// Resolved cover-image file cache (avoids re-hitting the disk on rebuilds).
 final Map<String, Future<File?>> _coverFileCache = {};
 
-/// A notebook in the library: grid variant (cover ~3:4, title, page count,
-/// favorite star, tag dots) or a list row ([listMode]).
+/// A notebook in the library: grid variant (3:4 [CoverArt], title, page-count
+/// chip, favorite badge) or a list row ([listMode]).
 ///
-/// Long-press or the overflow button invokes [onMenu] — the parent shows the
-/// action sheet (rename / move / tags / favorite / delete-or-restore).
+/// Long-press invokes [onMenu] — the parent shows the action sheet (rename /
+/// move / tags / favorite / delete-or-restore).
 class NotebookCard extends StatelessWidget {
   const NotebookCard({
     super.key,
@@ -38,7 +40,7 @@ class NotebookCard extends StatelessWidget {
   /// Long-press / overflow menu — the parent shows the modal sheet.
   final void Function(NotebookEntity notebook) onMenu;
 
-  /// Renders a ListTile-style row instead of the grid card.
+  /// Renders a row instead of the grid cell.
   final bool listMode;
 
   @override
@@ -49,74 +51,36 @@ class NotebookCard extends StatelessWidget {
   // ------------------------------------------------------------------- grid
 
   Widget _buildGrid(BuildContext context) {
-    final nc = nanoteColors(context);
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onOpen,
-        onLongPress: () => onMenu(notebook),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  _buildCover(),
-                  Positioned(
-                    top: 4,
-                    right: 4,
-                    child: Material(
-                      color: Colors.black.withValues(alpha: 0.35),
-                      shape: const CircleBorder(),
-                      clipBehavior: Clip.antiAlias,
-                      child: InkWell(
-                        onTap: () => onMenu(notebook),
-                        child: const SizedBox(
-                          width: 44,
-                          height: 44,
-                          child:
-                              Icon(Icons.more_vert, size: 20, color: Colors.white),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned(bottom: 6, left: 6, child: _coverBadge()),
-                ],
+    return Pressable(
+      onTap: onOpen,
+      onLongPress: () => onMenu(notebook),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                width: w,
+                height: w * 4 / 3,
+                child: _coverWithOverlays(context),
               ),
-            ),
-            Padding(
-              padding:
-                  const EdgeInsetsDirectional.only(start: 10, end: 2, top: 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    notebook.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w700),
-                  ),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '${S.num(pageCount)} ${S.t('pagesCount')}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 11, color: nc.mutedFg),
-                        ),
-                      ),
-                      _favoriteButton(context),
-                    ],
-                  ),
-                  _tagDots(),
-                ],
+              const SizedBox(height: 6),
+              Text(
+                notebook.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.start,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
               ),
-            ),
-          ],
-        ),
+              const SizedBox(height: 4),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: _pageCountChip(context),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -128,11 +92,14 @@ class NotebookCard extends StatelessWidget {
     return Card(
       clipBehavior: Clip.antiAlias,
       child: ListTile(
+        contentPadding:
+            const EdgeInsetsDirectional.fromSTEB(12, 8, 6, 8),
         onTap: onOpen,
         onLongPress: () => onMenu(notebook),
-        leading: ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: SizedBox(width: 44, height: 58, child: _buildCover()),
+        leading: SizedBox(
+          width: 44,
+          height: 58,
+          child: _cover(radius: NANOTE_RADIUS_SM),
         ),
         title: Text(
           notebook.title,
@@ -158,7 +125,7 @@ class NotebookCard extends StatelessWidget {
             _favoriteButton(context),
             IconButton(
               onPressed: () => onMenu(notebook),
-              icon: const Icon(Icons.more_vert, size: 20),
+              icon: const Icon(LucideIcons.ellipsis_vertical, size: 20),
               tooltip: S.t('edit'),
             ),
           ],
@@ -178,7 +145,42 @@ class NotebookCard extends StatelessWidget {
 
   // ----------------------------------------------------------------- pieces
 
-  Widget _buildCover() {
+  /// Cover stack with the optional overlays (favorite star, PDF / trash
+  /// countdown badges).
+  Widget _coverWithOverlays(BuildContext context) {
+    final nc = nanoteColors(context);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        _cover(radius: NANOTE_RADIUS_LG),
+        // Favorite star — bottom-start corner.
+        if (notebook.favorite)
+          PositionedDirectional(
+            start: 6,
+            bottom: 6,
+            child: Container(
+              padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.92),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(LucideIcons.star,
+                  size: 14, color: nc.warning),
+            ),
+          ),
+        // PDF / trash countdown badge — bottom-end corner.
+        PositionedDirectional(
+          end: 6,
+          bottom: 6,
+          child: _coverBadge(),
+        ),
+      ],
+    );
+  }
+
+  /// The notebook cover: custom image when set, otherwise the built-in
+  /// [CoverArt] (3:4, gradient/flat/dots/lines, ink-1 shadow).
+  Widget _cover({required double radius}) {
     final rel = notebook.coverImagePath;
     if (rel != null) {
       return FutureBuilder<File?>(
@@ -187,29 +189,51 @@ class NotebookCard extends StatelessWidget {
         builder: (context, snap) {
           final f = snap.data;
           if (f != null) {
-            return Image.file(
-              f,
-              fit: BoxFit.cover,
-              width: double.infinity,
-              height: double.infinity,
-              errorBuilder: (_, __, ___) => _gradientCover(),
+            return Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(radius),
+                boxShadow: nanoteColors(context).inkShadow1,
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(radius),
+                child: Image.file(
+                  f,
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                  height: double.infinity,
+                  errorBuilder: (_, __, ___) =>
+                      CoverArt(cover: _coverDef, borderRadius: radius),
+                ),
+              ),
             );
           }
-          return _gradientCover();
+          return CoverArt(cover: _coverDef, borderRadius: radius);
         },
       );
     }
-    return _gradientCover();
+    return CoverArt(cover: _coverDef, borderRadius: radius);
   }
 
-  Widget _gradientCover() {
-    final cover = coverById(notebook.coverId) ?? BUILTIN_COVERS.first;
-    return DecoratedBox(
+  CoverDef get _coverDef =>
+      coverById(notebook.coverId) ?? BUILTIN_COVERS.first;
+
+  /// Small rounded-full page-count chip ("12 pages") on a secondary surface.
+  Widget _pageCountChip(BuildContext context) {
+    final nc = nanoteColors(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: cover.colors,
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+        color: nc.surfaceVariant,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        '${S.num(pageCount)} ${S.t('pagesCount')}',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w600,
+          color: nc.mutedFg,
         ),
       ),
     );
@@ -219,12 +243,7 @@ class NotebookCard extends StatelessWidget {
   Widget _coverBadge() {
     if (notebook.deleted) {
       final days = LibraryController.I.daysLeftInTrash(notebook);
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.6),
-          borderRadius: BorderRadius.circular(999),
-        ),
+      return _scrimBadge(
         child: Text(
           '${S.num(days)} ${S.t('daysLeft')}',
           style: const TextStyle(
@@ -233,16 +252,11 @@ class NotebookCard extends StatelessWidget {
       );
     }
     if (notebook.pdfPath != null) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.6),
-          borderRadius: BorderRadius.circular(999),
-        ),
+      return _scrimBadge(
         child: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.picture_as_pdf, size: 12, color: Colors.white),
+            Icon(LucideIcons.file_text, size: 14, color: Colors.white),
             SizedBox(width: 3),
             Text('PDF',
                 style: TextStyle(
@@ -256,11 +270,25 @@ class NotebookCard extends StatelessWidget {
     return const SizedBox.shrink();
   }
 
+  Widget _scrimBadge({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: child,
+    );
+  }
+
   Widget _favoriteButton(BuildContext context) {
     final nc = nanoteColors(context);
     return IconButton(
       onPressed: onFavorite,
-      icon: Icon(notebook.favorite ? Icons.star : Icons.star_border, size: 20),
+      icon: Icon(
+        notebook.favorite ? LucideIcons.star : LucideIcons.star_off,
+        size: 20,
+      ),
       color: notebook.favorite ? nc.warning : nc.mutedFg,
       tooltip: S.t(notebook.favorite ? 'unfavorite' : 'favorite'),
     );

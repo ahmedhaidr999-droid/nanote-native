@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../../i18n/strings.dart';
 import '../../persistence/file_store.dart';
@@ -9,14 +10,14 @@ import '../../theme/nanote_theme.dart';
 
 /// The 8 built-in stickers (non-deletable), drawn with simple icons.
 const List<IconData> _builtinStickerIcons = [
-  Icons.favorite,
-  Icons.star,
-  Icons.sentiment_satisfied,
-  Icons.check,
-  Icons.close,
-  Icons.arrow_forward,
-  Icons.lightbulb,
-  Icons.flag,
+  LucideIcons.heart,
+  LucideIcons.star,
+  LucideIcons.face_grinning,
+  LucideIcons.check,
+  LucideIcons.x,
+  LucideIcons.arrow_right,
+  LucideIcons.lightbulb,
+  LucideIcons.flag,
 ];
 
 /// Sticker manager ('/stickers'): user PNG stickers grid with import
@@ -92,73 +93,108 @@ class _StickerManagerViewState extends State<StickerManagerView> {
       appBar: AppBar(title: Text(S.t('stickerManager'))),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _import,
-        icon: const Icon(Icons.add_photo_alternate_outlined),
+        icon: const Icon(LucideIcons.image_plus),
         label: Text(S.t('importSticker')),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 100),
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
-            child: Text(
-              S.t('tool.sticker'),
-              style: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w700),
+          _section(
+            context,
+            icon: LucideIcons.sticker,
+            title: S.t('tool.sticker'),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                for (final icon in _builtinStickerIcons)
+                  _builtinCell(context, icon),
+              ],
             ),
           ),
-          Card(
-            margin: EdgeInsets.zero,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (final icon in _builtinStickerIcons)
-                    _builtinCell(context, icon),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 20),
-          if (_stickers.isEmpty)
-            Card(
-              margin: EdgeInsets.zero,
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  children: [
-                    Icon(Icons.emoji_emotions_outlined,
-                        size: 40, color: nc.mutedFg),
-                    const SizedBox(height: 10),
-                    Text(
-                      S.t('noCustomStickers'),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 13, color: nc.mutedFg),
+          _section(
+            context,
+            icon: LucideIcons.image_plus,
+            title: S.t('customStickers'),
+            child: _stickers.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Column(
+                      children: [
+                        Icon(LucideIcons.face_grinning,
+                            size: 40, color: nc.mutedFg),
+                        const SizedBox(height: 10),
+                        Text(
+                          S.t('noCustomStickers'),
+                          textAlign: TextAlign.center,
+                          style: nanoteText(TextStyle(
+                              fontSize: 13,
+                              height: 1.35,
+                              color: nc.mutedFg)),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ),
-            )
-          else
-            Card(
-              margin: EdgeInsets.zero,
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    for (final rel in _stickers) _userCell(context, rel),
-                  ],
-                ),
-              ),
-            ),
-          const SizedBox(height: 88),
+                  )
+                : Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      for (final rel in _stickers) _userCell(context, rel),
+                    ],
+                  ),
+          ),
         ],
       ),
     );
   }
+
+  // ------------------------------------------------------------- section card
+
+  Widget _section(
+    BuildContext context, {
+    IconData? icon,
+    required String title,
+    required Widget child,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    final nc = nanoteColors(context);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(NANOTE_RADIUS_LG),
+        border: Border.all(color: cs.outline),
+        boxShadow: nc.inkShadow1,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (icon != null) ...[
+                Icon(icon, size: 15, color: nc.mutedFg),
+                const SizedBox(width: 7),
+              ],
+              Text(
+                title,
+                style: nanoteText(TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                  color: nc.mutedFg,
+                )),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------------- cells
 
   Widget _builtinCell(BuildContext context, IconData icon) {
     final cs = Theme.of(context).colorScheme;
@@ -166,27 +202,25 @@ class _StickerManagerViewState extends State<StickerManagerView> {
       width: 64,
       height: 64,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(NANOTE_RADIUS_MD),
         color: cs.secondary,
         border: Border.all(color: cs.outline),
       ),
-      child:
-          Icon(icon, size: 30, color: cs.primary),
+      child: Icon(icon, size: 28, color: cs.primary),
     );
   }
 
   Widget _userCell(BuildContext context, String rel) {
     final cs = Theme.of(context).colorScheme;
     final nc = nanoteColors(context);
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
+    return Pressable(
       onLongPress: () => _delete(rel),
       child: Container(
         width: 64,
         height: 64,
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(NANOTE_RADIUS_MD),
           border: Border.all(color: cs.outline),
         ),
         child: FutureBuilder<File?>(
@@ -198,11 +232,11 @@ class _StickerManagerViewState extends State<StickerManagerView> {
               return Image.file(
                 f,
                 fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => Icon(Icons.broken_image_outlined,
-                    color: nc.mutedFg),
+                errorBuilder: (_, __, ___) =>
+                    Icon(LucideIcons.image_off, color: nc.mutedFg),
               );
             }
-            return Icon(Icons.image_outlined, color: nc.mutedFg);
+            return Icon(LucideIcons.image, color: nc.mutedFg);
           },
         ),
       ),

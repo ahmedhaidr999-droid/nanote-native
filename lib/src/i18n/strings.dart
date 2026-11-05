@@ -11,6 +11,10 @@ class S {
 
   static final ValueNotifier<Lang> lang = ValueNotifier<Lang>(Lang.en);
 
+  /// Optional Hindi (Arabic-Indic ٠١٢٣) digit rendering — OFF by default
+  /// (Latin digits always), toggled from Settings (v1.9.1 spec).
+  static bool hindiDigits = false;
+
   static bool get isAr => lang.value == Lang.ar;
 
   static TextDirection get textDirection =>
@@ -26,10 +30,10 @@ class S {
 
   static const _arDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
 
-  /// Arabic-Indic numerals in Arabic mode.
+  /// Latin digits by default; Hindi (٠١٢٣) only when the setting is on.
   static String num(dynamic n) {
     final s = n.toString();
-    if (!isAr) return s;
+    if (!isAr || !hindiDigits) return s;
     return String.fromCharCodes(
       s.runes.map((r) {
         final c = r - 0x30;
@@ -156,6 +160,24 @@ class S {
     'size.a4Landscape': 'A4 Landscape',
     'size.letterPortrait': 'Letter Portrait',
     'size.letterLandscape': 'Letter Landscape',
+    'size.a5Portrait': 'A5 Portrait',
+    'size.a5Landscape': 'A5 Landscape',
+
+    // covers (v1.9.1 — 12)
+    'cover.nanoteBlue': 'Nanote Blue',
+    'cover.midnight': 'Midnight',
+    'cover.sunset': 'Sunset',
+    'cover.meadow': 'Meadow',
+    'cover.orchid': 'Orchid',
+    'cover.rosewater': 'Rosewater',
+    'cover.paperWhite': 'Paper White',
+    'cover.kraft': 'Kraft',
+    'cover.inkBlack': 'Ink Black',
+    'cover.forest': 'Forest',
+    'cover.dots': 'Dots',
+    'cover.lines': 'Lines',
+    'covers': 'Cover',
+    'myNotebooks': 'My Notebooks',
 
     // tools
     'tool.pen': 'Pen',
@@ -387,6 +409,9 @@ class S {
     'themeDark': 'Dark',
     'themeSystem': 'System',
     'language': 'Language',
+    'numerals': 'Numerals',
+    'numeralsLatin': 'Latin (123)',
+    'numeralsHindi': 'Hindi (٠١٢٣)',
     'leftHanded': 'Left-handed mode',
     'leftHandedHint': 'Mirrors the tool rail to the left edge',
     'writing': 'Writing',
@@ -547,6 +572,24 @@ class S {
     'size.a4Landscape': 'A4 عرضي',
     'size.letterPortrait': 'Letter طولي',
     'size.letterLandscape': 'Letter عرضي',
+    'size.a5Portrait': 'A5 طولي',
+    'size.a5Landscape': 'A5 عرضي',
+
+    // covers (v1.9.1 — 12)
+    'cover.nanoteBlue': 'أزرق نانوت',
+    'cover.midnight': 'منتصف الليل',
+    'cover.sunset': 'الغروب',
+    'cover.meadow': 'المروج',
+    'cover.orchid': 'الأوركيد',
+    'cover.rosewater': 'ماء الورد',
+    'cover.paperWhite': 'أبيض ورقي',
+    'cover.kraft': 'كرافت',
+    'cover.inkBlack': 'حبر أسود',
+    'cover.forest': 'الغابة',
+    'cover.dots': 'نقاط',
+    'cover.lines': 'خطوط',
+    'covers': 'الغلاف',
+    'myNotebooks': 'دفاتري',
 
     // tools
     'tool.pen': 'قلم',
@@ -779,6 +822,9 @@ class S {
     'themeDark': 'داكن',
     'themeSystem': 'النظام',
     'language': 'اللغة',
+    'numerals': 'الأرقام',
+    'numeralsLatin': 'لاتينية (123)',
+    'numeralsHindi': 'هندية (٠١٢٣)',
     'leftHanded': 'وضع اليد اليسرى',
     'leftHandedHint': 'ينقل شريط الأدوات إلى الحافة اليسرى',
     'writing': 'الكتابة',

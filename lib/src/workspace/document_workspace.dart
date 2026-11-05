@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../controllers/audio_controller.dart';
 import '../controllers/pdf_document_controller.dart';
@@ -60,6 +61,13 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
   int? _currentPageId;
   bool _railHidden = false;
   bool _didInitialFit = false;
+
+  /// Floating tool-rail dock (draggable capsule). Phones default to the
+  /// start/end edge; tablets/landscape to the bottom. The user's drag
+  /// overrides the default for this session.
+  RailDock _railDock = RailDock.start;
+  bool _dockInitialized = false;
+  bool _dockUserSet = false;
 
   /// After the initial fit, re-fit once when the first PDF page aspect lands
   /// (PDF notebooks start with a paper-size guess that gets corrected).
@@ -123,7 +131,12 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     if (pdfPath != null) {
       final f = await FileStore.tryResolve(pdfPath);
       if (f != null) {
-        await PdfDocumentController.I.open(f.path);
+        final ok = await PdfDocumentController.I.open(f.path);
+        // SELF-HEAL: a PDF notebook must own one page per PDF page. Older
+        // notebooks (single-page import era) show only page 1 otherwise.
+        if (ok) {
+          await engine.syncPagesToPdfCount(PdfDocumentController.I.pageCount);
+        }
       }
     }
     if (!mounted) return;
@@ -136,17 +149,19 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
   /// the PDF render is NEVER stretched and ink lands exactly on the content.
   ///
   /// Reads/kicks size resolution during build, but the ACTUAL application
-  /// (which notifies listeners — e.g. the filmstrip, built BEFORE the canvas)
-  /// is deferred to a post-frame callback so nothing is ever notified during
-  /// the build phase.
+  /// (which notifies listeners) is deferred to a post-frame callback so
+  /// nothing is ever notified during the build phase. Pending applications
+  /// accumulate in [_pendingPdfSizes] — nothing is ever DROPPED when a
+  /// callback is already scheduled (a dropped aspect left stale geometry on
+  /// the pages below while scrolling).
   bool _pdfSizesScheduled = false;
+  final List<(PageMeta, Size)> _pendingPdfSizes = [];
 
   void _applyPdfSizes() {
     final pdf = PdfDocumentController.I;
     final engine = StrokeEngine.I;
     if (!pdf.isOpen || engine.pages.isEmpty) return;
     final count = pdf.pageCount;
-    final pending = <(PageMeta, Size)>[];
     for (var i = 0; i < engine.pages.length; i++) {
       final meta = engine.pages[i];
       if (meta.pdfSize != null) continue;
@@ -154,17 +169,24 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
       final ps = pdf.pageSize(i + 1); // 1-based; null → async resolve kicked
       if (ps == null || ps.width <= 0 || ps.height <= 0) continue;
       final base = meta.sizeDef.size;
-      pending.add((meta, Size(base.width, base.width * ps.height / ps.width)));
+      final size = Size(base.width, base.width * ps.height / ps.width);
+      // Dedupe against what is already pending.
+      final already = _pendingPdfSizes.any(
+        (e) => e.$1.id == meta.id,
+      );
+      if (!already) _pendingPdfSizes.add((meta, size));
     }
-    if (pending.isEmpty || _pdfSizesScheduled) return;
+    if (_pendingPdfSizes.isEmpty || _pdfSizesScheduled) return;
     _pdfSizesScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _pdfSizesScheduled = false;
-      if (!mounted) return;
+      if (!mounted || _pendingPdfSizes.isEmpty) return;
+      final batch = List.of(_pendingPdfSizes);
+      _pendingPdfSizes.clear();
       var refit = _refitOnAspect;
-      for (final (meta, size) in pending) {
+      for (final (meta, size) in batch) {
         if (meta.pdfSize != null) continue;
-        engine.applyPdfPageSize(meta.id, size);
+        StrokeEngine.I.applyPdfPageSize(meta.id, size);
         if (refit) {
           // First aspect landed → re-fit page 0 so the opened view centers
           // the REAL page instead of the paper-size guess.
@@ -422,32 +444,76 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
       appBar: _buildAppBar(context, engine),
       body: ListenableBuilder(
         listenable: SettingsController.I,
-        builder: (context, _) {
-          final leftHanded = SettingsController.I.settings.leftHanded;
-          final rail = ToolRail(
-            tools: ToolController.I,
-            engine: engine,
-            ruler: ruler,
-            leftHanded: leftHanded,
-            hidden: _railHidden,
-            onColorTap: () => unawaited(showColorPopover(context, ToolController.I)),
-            onUndo: engine.undo,
-            onRedo: engine.redo,
-          );
-          final canvas = Expanded(child: _buildCanvasArea(context));
-          final row = leftHanded ? [rail, canvas] : [canvas, rail];
-          return Row(children: row);
-        },
+        builder: (context, _) => _buildEditorBody(context, engine),
       ),
+    );
+  }
+
+  /// Editor body: the canvas fills the screen; the tool rail floats above
+  /// it as a draggable capsule (bottom-center horizontal by default, or a
+  /// vertical capsule on the logical start/end edge — phones default to the
+  /// edge, tablets/landscape to the bottom).
+  Widget _buildEditorBody(BuildContext context, StrokeEngine engine) {
+    final leftHanded = SettingsController.I.settings.leftHanded;
+    // First layout decides the default dock from the available width.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_dockInitialized && _screenSize != Size.zero) {
+        _dockInitialized = true;
+        if (!_dockUserSet) {
+          setState(() {
+            _railDock = _screenSize.width < 600
+                ? (leftHanded ? RailDock.end : RailDock.start)
+                : RailDock.bottom;
+          });
+        }
+      }
+    });
+    final rail = ToolRail(
+      tools: ToolController.I,
+      engine: engine,
+      ruler: ruler,
+      dock: _railDock,
+      hidden: _railHidden,
+      onDockChange: (d) => setState(() {
+        _railDock = d;
+        _dockUserSet = true;
+      }),
+      onColorTap: () =>
+          unawaited(showColorPopover(context, ToolController.I)),
+      onUndo: engine.undo,
+      onRedo: engine.redo,
+    );
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // The canvas (full-bleed; the rail floats above it).
+        Positioned.fill(child: _buildCanvasArea(context)),
+        // The floating rail, docked.
+        _railHidden
+            ? const SizedBox.shrink()
+            : Align(
+                alignment: switch (_railDock) {
+                  RailDock.bottom => Alignment.bottomCenter,
+                  RailDock.start => AlignmentDirectional.centerStart,
+                  RailDock.end => AlignmentDirectional.centerEnd,
+                },
+                child: SafeArea(
+                  minimum: const EdgeInsets.all(10),
+                  child: rail,
+                ),
+              ),
+      ],
     );
   }
 
   PreferredSizeWidget _buildAppBar(BuildContext context, StrokeEngine engine) {
     final title = (engine.notebook?.title ?? '').trim();
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
     return AppBar(
       toolbarHeight: 56,
       leading: IconButton(
-        icon: const Icon(Icons.arrow_back),
+        icon: Icon(isRtl ? LucideIcons.arrow_right : LucideIcons.arrow_left,
+            size: 22),
         tooltip: S.t('close'),
         onPressed: () => Navigator.of(context).maybePop(),
       ),
@@ -457,23 +523,27 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
         overflow: TextOverflow.ellipsis,
       ),
       actions: [
-        ListenableBuilder(
-          listenable: engine.historyChanged,
-          builder: (context, _) => Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.undo),
-                tooltip: S.t('undo'),
-                onPressed: engine.canUndo ? engine.undo : null,
-              ),
-              IconButton(
-                icon: const Icon(Icons.redo),
-                tooltip: S.t('redo'),
-                onPressed: engine.canRedo ? engine.redo : null,
-              ),
-            ],
+        // Spec top bar: back • title • undo/redo • export. Undo/redo stay in
+        // the floating rail everywhere; the header repeats them on wide
+        // screens only (phones would overflow).
+        if (MediaQuery.sizeOf(context).width >= 600)
+          ListenableBuilder(
+            listenable: engine.historyChanged,
+            builder: (context, _) => Row(
+              children: [
+                IconButton(
+                  icon: const Icon(LucideIcons.undo, size: 20),
+                  tooltip: S.t('undo'),
+                  onPressed: engine.canUndo ? engine.undo : null,
+                ),
+                IconButton(
+                  icon: const Icon(LucideIcons.redo, size: 20),
+                  tooltip: S.t('redo'),
+                  onPressed: engine.canRedo ? engine.redo : null,
+                ),
+              ],
+            ),
           ),
-        ),
         AnimatedBuilder(
           animation: viewport,
           builder: (context, _) => TextButton(
@@ -483,7 +553,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
         ),
         PopupMenuButton<String>(
           tooltip: S.t('export'),
-          icon: const Icon(Icons.share),
+          icon: const Icon(LucideIcons.share, size: 20),
           onSelected: (v) {
             if (v == 'png') {
               final meta = _currentMeta;
@@ -500,12 +570,12 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
           ],
         ),
         IconButton(
-          icon: const Icon(Icons.mic),
+          icon: const Icon(LucideIcons.mic, size: 20),
           tooltip: S.t('audio'),
           onPressed: () => unawaited(showAudioPanel(context, engine)),
         ),
         IconButton(
-          icon: const Icon(Icons.auto_awesome_mosaic),
+          icon: const Icon(LucideIcons.layers, size: 20),
           tooltip: S.t('pages'),
           onPressed: () => unawaited(showPagesSheet(
             context,
@@ -515,7 +585,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
           )),
         ),
         IconButton(
-          icon: const Icon(Icons.settings_outlined),
+          icon: const Icon(LucideIcons.settings, size: 20),
           tooltip: S.t('settings'),
           onPressed: () => Navigator.pushNamed(context, '/settings'),
         ),
@@ -533,8 +603,6 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
         // larger axis keeps its edges within the view (pages can never be
         // panned fully off-screen — the "floating away" fix).
         viewport.screenExtent = size;
-        viewport.panBounds = geometry.tightBounds;
-        viewport.clampToDoc();
         _scheduleInitialFit();
         return Stack(
           fit: StackFit.expand,
@@ -556,6 +624,13 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
                   animation: _canvasRepaint,
                   builder: (context, _) {
                     _applyPdfSizes();
+                    // Refresh the pan bounds on EVERY repaint (page adds,
+                    // PDF aspect changes, deletions) — the LayoutBuilder
+                    // above only re-runs on parent rebuilds, so a stale
+                    // bounds previously LOCKED scrolling after the page
+                    // list changed.
+                    viewport.panBounds = geometry.tightBounds;
+                    viewport.clampToDoc();
                     _syncCurrentPageFromCenter(size);
                     final visible =
                         geometry.visiblePages(viewport.visibleDocRect(size));
@@ -609,7 +684,9 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     );
   }
 
-  /// Floating tool-settings panel anchored at the rail edge of the canvas.
+  /// Floating tool-settings panel, anchored relative to the rail dock:
+  /// horizontal (bottom) rail → panel floats ABOVE the rail, centered;
+  /// vertical (side) rail → panel hugs the same edge, under the app bar.
   /// Tap a rail tool → select + open; tap the ACTIVE tool again → close.
   Widget _buildToolSettingsPanel(BuildContext context) {
     return ListenableBuilder(
@@ -618,20 +695,28 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
         if (_railHidden || !ToolController.I.settingsOpen) {
           return const SizedBox.shrink();
         }
-        final isRtl = Directionality.of(context) == TextDirection.rtl;
-        final leftHanded = SettingsController.I.settings.leftHanded;
-        // The Row places the rail at the outer edge; in RTL the visual order
-        // flips, so "rail on the right" ⇔ isRtl == leftHanded.
-        final railAtRight = isRtl == leftHanded;
+        final AlignmentGeometry alignment;
+        final EdgeInsets padding;
+        switch (_railDock) {
+          case RailDock.bottom:
+            alignment = Alignment.bottomCenter;
+            padding = const EdgeInsets.only(bottom: 96);
+          case RailDock.start:
+            alignment = AlignmentDirectional.topStart;
+            padding = const EdgeInsets.all(10);
+          case RailDock.end:
+            alignment = AlignmentDirectional.topEnd;
+            padding = const EdgeInsets.all(10);
+        }
         return AnimatedSwitcher(
           duration: const Duration(milliseconds: 160),
           switchInCurve: Curves.easeOutCubic,
           switchOutCurve: Curves.easeInCubic,
           child: Align(
             key: ValueKey('panel-${ToolController.I.tool.name}'),
-            alignment: railAtRight ? Alignment.topRight : Alignment.topLeft,
+            alignment: alignment,
             child: Padding(
-              padding: const EdgeInsets.all(10),
+              padding: padding,
               child: ToolSettingsPanel(tools: ToolController.I),
             ),
           ),
@@ -670,8 +755,10 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
               pageSize: rect.size,
               ink: ink,
               replayAt: _replayAt(),
-              // The PDF tile provides the visual paper when present.
-              paintPaper: !pdfOpen,
+              // ALWAYS paint the paper under the PDF tile: the tile covers
+              // it once rendered, but a pending/failed render must NEVER
+              // leave a dark void where a page should be.
+              paintPaper: true,
             ),
           ),
           if (meta.id == _currentPageId)
@@ -781,7 +868,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
             child: cur.radius >= 18
                 ? Center(
                     child: Icon(
-                      Icons.auto_fix_normal,
+                      LucideIcons.eraser,
                       size: math.min(cur.radius * 0.9, 22),
                       color: scheme.primary.withValues(alpha: 0.9),
                     ),
@@ -817,35 +904,45 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
         return Positioned(
           left: left,
           top: top,
-          child: Material(
-            elevation: 6,
-            borderRadius: BorderRadius.circular(NANOTE_RADIUS),
-            color: scheme.surface,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  _barBtn(Icons.delete_outline, 'deleteSelection',
-                      engine.deleteSelection),
-                  _barBtn(Icons.content_copy, 'duplicateSelection',
-                      engine.duplicateSelection),
-                  _barBtn(Icons.copy, 'copySelection', engine.copySelection),
-                  _barBtn(Icons.content_paste, 'pasteSelection',
-                      engine.hasClipboard ? _pasteHere : null),
-                  _barBtn(Icons.flip_to_front, 'bringFront',
-                      engine.bringSelectionToFront),
-                  _barBtn(Icons.flip_to_back, 'sendBack',
-                      engine.sendSelectionToBack),
-                  _barBtn(Icons.call_merge, 'group', engine.groupSelection),
-                  _barBtn(Icons.call_split, 'ungroup', engine.ungroupSelection),
-                  if (_selectedTextElement(engine, pageId) != null)
-                    _barBtn(Icons.translate, 'translate', () {
-                      final el = _selectedTextElement(engine, pageId);
-                      if (el != null && el.text.trim().isNotEmpty) {
-                        unawaited(showTranslatePopup(context, el.text));
-                      }
-                    }),
-                ],
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: scheme.outline),
+              boxShadow: nanoteColors(context).inkShadow2,
+            ),
+            child: Material(
+              elevation: 0,
+              borderRadius: BorderRadius.circular(999),
+              color: scheme.surface,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _barBtn(LucideIcons.trash, 'deleteSelection',
+                        engine.deleteSelection),
+                    _barBtn(LucideIcons.copy_plus, 'duplicateSelection',
+                        engine.duplicateSelection),
+                    _barBtn(LucideIcons.copy, 'copySelection',
+                        engine.copySelection),
+                    _barBtn(LucideIcons.clipboard_paste, 'pasteSelection',
+                        engine.hasClipboard ? _pasteHere : null),
+                    _barBtn(LucideIcons.bring_to_front, 'bringFront',
+                        engine.bringSelectionToFront),
+                    _barBtn(LucideIcons.send_to_back, 'sendBack',
+                        engine.sendSelectionToBack),
+                    _barBtn(LucideIcons.combine, 'group',
+                        engine.groupSelection),
+                    _barBtn(LucideIcons.split, 'ungroup',
+                        engine.ungroupSelection),
+                    if (_selectedTextElement(engine, pageId) != null)
+                      _barBtn(LucideIcons.languages, 'translate', () {
+                        final el = _selectedTextElement(engine, pageId);
+                        if (el != null && el.text.trim().isNotEmpty) {
+                          unawaited(showTranslatePopup(context, el.text));
+                        }
+                      }),
+                  ],
+                ),
               ),
             ),
           ),

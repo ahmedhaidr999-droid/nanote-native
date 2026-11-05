@@ -1,7 +1,7 @@
 name: nanote_native
 description: "Nanote Native — local-first handwriting notes app (Flutter, Android)."
 publish_to: "none"
-version: 2.1.0+1
+version: 2.2.0+1
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
@@ -37,6 +37,9 @@ dependencies:
   # PDF export.
   pdf: ^3.11.3
 
+  # Lucide icon set (v1.9.1 design spec: Lucide icons exclusively).
+  flutter_lucide: ^1.68.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -51,3 +54,31 @@ dependency_overrides:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/fonts/
+
+  # Latin: Inter (cv11 + ss01 features enabled in the theme).
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
+    # Arabic: Noto Sans Arabic (Arabic glyphs always resolve here first,
+    # everything else falls through to Inter).
+    - family: NotoSansArabic
+      fonts:
+        - asset: assets/fonts/NotoSansArabic-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/NotoSansArabic-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/NotoSansArabic-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/NotoSansArabic-Bold.ttf
+          weight: 700

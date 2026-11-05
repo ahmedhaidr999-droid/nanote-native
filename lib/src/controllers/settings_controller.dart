@@ -21,6 +21,7 @@ class SettingsController extends ChangeNotifier {
     if (_loaded) return;
     settings = await SettingsStore.I.load();
     S.lang.value = settings.lang == 'ar' ? Lang.ar : Lang.en;
+    S.hindiDigits = settings.numerals == 'hindi';
     PressureCurve.gamma = settings.pressureCurve;
     _loaded = true;
     notifyListeners();
@@ -39,6 +40,14 @@ class SettingsController extends ChangeNotifier {
   Future<void> setLang(String lang) async {
     settings.lang = lang;
     S.lang.value = lang == 'ar' ? Lang.ar : Lang.en;
+    await _persist();
+    notifyListeners();
+  }
+
+  /// Numerals: 'latin' (default) or 'hindi' (٠١٢٣) for Arabic display.
+  Future<void> setNumerals(String v) async {
+    settings.numerals = v == 'hindi' ? 'hindi' : 'latin';
+    S.hindiDigits = settings.numerals == 'hindi';
     await _persist();
     notifyListeners();
   }

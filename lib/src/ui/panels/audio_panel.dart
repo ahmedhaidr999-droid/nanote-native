@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../../controllers/audio_controller.dart';
 import '../../controllers/stroke_engine.dart';
@@ -11,6 +12,9 @@ import '../../theme/nanote_theme.dart';
 /// Audio notes panel: record button with live level meter + elapsed time,
 /// sync-replay toggle (with exit banner) and the notebook's recording list
 /// with play/pause, seek slider and delete. Driven by [AudioController.I].
+///
+/// v1.9.1 restyle: pill record button, thin level meter, ink-1 recording
+/// cards (radius 12, 1px border), circular play buttons, Lucide icons.
 Future<void> showAudioPanel(BuildContext context, StrokeEngine engine) async {
   final controller = AudioController.I;
   final notebookId = engine.notebook?.id;
@@ -88,18 +92,25 @@ class _AudioPanelState extends State<_AudioPanel> {
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
+    final scheme = Theme.of(context).colorScheme;
     return SafeArea(
       child: SizedBox(
         height: MediaQuery.of(context).size.height * 0.8,
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+              padding: const EdgeInsetsDirectional.fromSTEB(20, 8, 20, 4),
               child: Row(
                 children: [
                   Expanded(
-                    child: Text(S.t('audioPanel'),
-                        style: Theme.of(context).textTheme.titleMedium),
+                    child: Text(
+                      S.t('audioPanel'),
+                      style: nanoteText(TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.onSurface,
+                      )),
+                    ),
                   ),
                 ],
               ),
@@ -112,13 +123,19 @@ class _AudioPanelState extends State<_AudioPanel> {
               animation: controller,
               builder: (context, _) => _replaySection(context, controller),
             ),
-            const Divider(height: 1),
+            Divider(height: 1, color: scheme.outline),
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+              padding: const EdgeInsetsDirectional.fromSTEB(20, 10, 20, 6),
               child: Align(
                 alignment: AlignmentDirectional.centerStart,
-                child: Text(S.t('recordings'),
-                    style: Theme.of(context).textTheme.titleSmall),
+                child: Text(
+                  S.t('recordings'),
+                  style: nanoteText(TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: nanoteColors(context).mutedFg,
+                  )),
+                ),
               ),
             ),
             Expanded(
@@ -159,21 +176,23 @@ class _AudioPanelState extends State<_AudioPanel> {
 
   Widget _recordSection(BuildContext context, AudioController controller) {
     final cs = nanoteColors(context);
+    final scheme = Theme.of(context).colorScheme;
     final recording = controller.isRecording;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+      padding: const EdgeInsetsDirectional.fromSTEB(20, 12, 20, 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           FilledButton.icon(
             style: recording
                 ? FilledButton.styleFrom(
-                    backgroundColor: Theme.of(context).colorScheme.error,
-                    foregroundColor: Theme.of(context).colorScheme.onError,
+                    backgroundColor: scheme.error,
+                    foregroundColor: scheme.onError,
                   )
                 : null,
             onPressed: _toggleRecord,
-            icon: Icon(recording ? Icons.stop : Icons.mic),
+            icon: Icon(recording ? LucideIcons.square : LucideIcons.mic,
+                size: 18),
             label: Text(recording ? S.t('stopRecording') : S.t('record')),
           ),
           if (recording) ...[
@@ -186,8 +205,11 @@ class _AudioPanelState extends State<_AudioPanel> {
                 return ClipRRect(
                   borderRadius: BorderRadius.circular(999),
                   child: SizedBox(
-                    height: 8,
-                    child: LinearProgressIndicator(value: level),
+                    height: 6,
+                    child: LinearProgressIndicator(
+                      value: level,
+                      minHeight: 6,
+                    ),
                   ),
                 );
               },
@@ -198,7 +220,8 @@ class _AudioPanelState extends State<_AudioPanel> {
                 Expanded(
                   child: Text(
                     '${S.t('recording')} · ${_fmtMs(controller.recordingElapsedMs())}',
-                    style: TextStyle(color: cs.mutedFg, fontSize: 13),
+                    style: nanoteText(TextStyle(
+                        color: cs.mutedFg, fontSize: 13)),
                   ),
                 ),
                 _recordingPageBadge(context, controller, cs),
@@ -217,25 +240,28 @@ class _AudioPanelState extends State<_AudioPanel> {
     final index = widget.engine.pages.indexWhere((p) => p.id == pageId);
     if (index < 0) return const SizedBox.shrink();
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
       decoration: BoxDecoration(
         color: cs.accent,
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
         '${S.t('page')} ${S.num(index + 1)}',
-        style: TextStyle(color: cs.accentFg, fontSize: 12),
+        style: nanoteText(
+            TextStyle(color: cs.accentFg, fontSize: 12, fontWeight: FontWeight.w600)),
       ),
     );
   }
 
   Widget _replaySection(BuildContext context, AudioController controller) {
     final cs = nanoteColors(context);
+    final scheme = Theme.of(context).colorScheme;
     return Column(
       children: [
         SwitchListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 20),
-          title: Text(S.t('syncReplay')),
+          title: Text(S.t('syncReplay'),
+              style: nanoteText(const TextStyle(fontSize: 14))),
           subtitle: Text(
             S.t('replayHint'),
             style: TextStyle(color: cs.mutedFg, fontSize: 12),
@@ -245,26 +271,30 @@ class _AudioPanelState extends State<_AudioPanel> {
         ),
         if (controller.syncReplayMode)
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 12, 4),
-            child: Card(
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-                child: Row(
-                  children: [
-                    Icon(Icons.history, size: 20, color: cs.warning),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(S.t('replayMode'),
-                          style: const TextStyle(fontSize: 13)),
-                    ),
-                    TextButton(
-                      onPressed: () =>
-                          unawaited(controller.exitSyncReplay()),
-                      child: Text(S.t('exitReplay')),
-                    ),
-                  ],
-                ),
+            padding: const EdgeInsetsDirectional.fromSTEB(20, 0, 12, 8),
+            child: Container(
+              decoration: BoxDecoration(
+                color: scheme.surface,
+                borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+                border: Border.all(color: scheme.outline),
+                boxShadow: cs.inkShadow1,
+              ),
+              padding: const EdgeInsetsDirectional.fromSTEB(12, 4, 4, 4),
+              child: Row(
+                children: [
+                  Icon(LucideIcons.rotate_ccw, size: 18, color: cs.warning),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(S.t('replayMode'),
+                        style:
+                            nanoteText(const TextStyle(fontSize: 13))),
+                  ),
+                  TextButton(
+                    onPressed: () =>
+                        unawaited(controller.exitSyncReplay()),
+                    child: Text(S.t('exitReplay')),
+                  ),
+                ],
               ),
             ),
           ),
@@ -311,6 +341,7 @@ class _RecordingRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = nanoteColors(context);
+    final scheme = Theme.of(context).colorScheme;
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
@@ -318,78 +349,136 @@ class _RecordingRow extends StatelessWidget {
         final playing = active && controller.isPlaying;
         final pageIndex =
             engine.pages.indexWhere((p) => p.id == recording.pageId);
-        return Column(
-          children: [
-            ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-              leading: IconButton(
-                icon: Icon(playing ? Icons.pause : Icons.play_arrow),
-                color: Theme.of(context).colorScheme.primary,
-                onPressed: () =>
-                    unawaited(controller.togglePlayPause(recording)),
-              ),
-              title: Text('🎤 ${S.num(index + 1)} · ${_hm(recording.createdAt)}'),
-              subtitle: Text(
-                '${_fmtMs(recording.durationMs)}'
-                '${pageIndex >= 0 ? ' · ${S.t('page')} ${S.num(pageIndex + 1)}' : ''}',
-                style: TextStyle(color: cs.mutedFg, fontSize: 12),
-              ),
-              trailing: IconButton(
-                icon: const Icon(Icons.delete_outline),
-                onPressed: () => unawaited(_confirmDelete(context)),
-              ),
-            ),
-            if (active)
-              StreamBuilder<Duration>(
-                stream: controller.onPositionChanged,
-                builder: (context, snapshot) {
-                  final position =
-                      snapshot.data ?? controller.position;
-                  var duration = controller.duration ??
-                      Duration(milliseconds: recording.durationMs);
-                  if (duration.inMilliseconds <= 0) {
-                    duration = const Duration(milliseconds: 1);
-                  }
-                  final positionMs = position.inMilliseconds
-                      .clamp(0, duration.inMilliseconds)
-                      .toInt();
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 44,
-                          child: Text(_fmtMs(positionMs),
-                              style: const TextStyle(fontSize: 11)),
+        return Container(
+          margin: const EdgeInsetsDirectional.fromSTEB(16, 5, 16, 5),
+          decoration: BoxDecoration(
+            color: scheme.surface,
+            borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+            border: Border.all(color: scheme.outline),
+            boxShadow: cs.inkShadow1,
+          ),
+          child: Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(8, 6, 4, 6),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Pressable(
+                      onTap: () =>
+                          unawaited(controller.togglePlayPause(recording)),
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: cs.accent,
+                          shape: BoxShape.circle,
                         ),
-                        Expanded(
-                          child: SliderTheme(
-                            data: const SliderThemeData(
-                              trackHeight: 3,
-                              thumbShape:
-                                  RoundSliderThumbShape(enabledThumbRadius: 7),
-                              overlayShape:
-                                  RoundSliderOverlayShape(overlayRadius: 12),
-                            ),
-                            child: Slider(
-                              value: positionMs.toDouble(),
-                              max: duration.inMilliseconds.toDouble(),
-                              onChanged: (v) => unawaited(controller
-                                  .seekTo(Duration(milliseconds: v.round()))),
-                            ),
+                        child: Center(
+                          child: Icon(
+                            playing ? LucideIcons.pause : LucideIcons.play,
+                            size: 18,
+                            color: scheme.primary,
                           ),
                         ),
-                        SizedBox(
-                          width: 44,
-                          child: Text(_fmtMs(duration.inMilliseconds),
-                              style: const TextStyle(fontSize: 11)),
-                        ),
-                      ],
+                      ),
                     ),
-                  );
-                },
-              ),
-          ],
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${S.num(index + 1)} · ${_hm(recording.createdAt)}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: nanoteText(TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                              color: scheme.onSurface,
+                            )),
+                          ),
+                          Text(
+                            '${_fmtMs(recording.durationMs)}'
+                            '${pageIndex >= 0 ? ' · ${S.t('page')} ${S.num(pageIndex + 1)}' : ''}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style:
+                                TextStyle(color: cs.mutedFg, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(
+                      width: 44,
+                      height: 44,
+                      child: IconButton(
+                        tooltip: S.t('deleteRecording'),
+                        padding: EdgeInsets.zero,
+                        icon: Icon(LucideIcons.trash,
+                            size: 18, color: cs.mutedFg),
+                        onPressed: () => unawaited(_confirmDelete(context)),
+                      ),
+                    ),
+                  ],
+                ),
+                if (active)
+                  StreamBuilder<Duration>(
+                    stream: controller.onPositionChanged,
+                    builder: (context, snapshot) {
+                      final position =
+                          snapshot.data ?? controller.position;
+                      var duration = controller.duration ??
+                          Duration(milliseconds: recording.durationMs);
+                      if (duration.inMilliseconds <= 0) {
+                        duration = const Duration(milliseconds: 1);
+                      }
+                      final positionMs = position.inMilliseconds
+                          .clamp(0, duration.inMilliseconds)
+                          .toInt();
+                      return Padding(
+                        padding: const EdgeInsetsDirectional.fromSTEB(8, 0, 12, 4),
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 44,
+                              child: Text(_fmtMs(positionMs),
+                                  style: nanoteText(TextStyle(
+                                      fontSize: 11,
+                                      color: cs.mutedFg))),
+                            ),
+                            Expanded(
+                              child: SliderTheme(
+                                data: const SliderThemeData(
+                                  trackHeight: 3,
+                                  thumbShape:
+                                      RoundSliderThumbShape(enabledThumbRadius: 7),
+                                  overlayShape:
+                                      RoundSliderOverlayShape(overlayRadius: 12),
+                                ),
+                                child: Slider(
+                                  value: positionMs.toDouble(),
+                                  max: duration.inMilliseconds.toDouble(),
+                                  onChanged: (v) => unawaited(controller
+                                      .seekTo(Duration(milliseconds: v.round()))),
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 44,
+                              child: Text(_fmtMs(duration.inMilliseconds),
+                                  textAlign: TextAlign.end,
+                                  style: nanoteText(TextStyle(
+                                      fontSize: 11,
+                                      color: cs.mutedFg))),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+              ],
+            ),
+          ),
         );
       },
     );

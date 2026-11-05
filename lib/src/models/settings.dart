@@ -55,6 +55,7 @@ class AppSettings {
   // Appearance
   String themeMode; // light | dark | system
   String lang; // ar | en
+  String numerals; // latin (default) | hindi (٠١٢٣)
   bool leftHanded;
 
   // Writing
@@ -90,6 +91,7 @@ class AppSettings {
   AppSettings({
     this.themeMode = 'system',
     this.lang = 'en',
+    this.numerals = 'latin',
     this.leftHanded = false,
     this.pressureCurve = 1.0,
     this.drawWithFinger = false,
@@ -146,6 +148,7 @@ class AppSettings {
   Map<String, dynamic> toJson() => {
         'themeMode': themeMode,
         'lang': lang,
+        'numerals': numerals,
         'leftHanded': leftHanded,
         'pressureCurve': pressureCurve,
         'drawWithFinger': drawWithFinger,
@@ -169,6 +172,7 @@ class AppSettings {
   factory AppSettings.fromJson(Map<String, dynamic> j) => AppSettings(
         themeMode: (j['themeMode'] as String?) ?? 'system',
         lang: (j['lang'] as String?) ?? 'en',
+        numerals: (j['numerals'] as String?) ?? 'latin',
         leftHanded: j['leftHanded'] as bool? ?? false,
         pressureCurve: (j['pressureCurve'] as num?)?.toDouble() ?? 1.0,
         drawWithFinger: j['drawWithFinger'] as bool? ?? false,

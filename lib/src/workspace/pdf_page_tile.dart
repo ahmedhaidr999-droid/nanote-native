@@ -68,6 +68,10 @@ class _PdfPageTileState extends State<PdfPageTile> {
     super.initState();
     widget.pdf.renderTick.addListener(_onTick);
     widget.viewport.renderTick.addListener(_onTick);
+    // The controller itself: doc open/close transitions wake the tile even
+    // when no render tick fired (e.g. it exhausted its retries while the
+    // document was still opening).
+    widget.pdf.addListener(_onTick);
   }
 
   @override
@@ -81,7 +85,9 @@ class _PdfPageTileState extends State<PdfPageTile> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.pdf != widget.pdf) {
       oldWidget.pdf.renderTick.removeListener(_onTick);
+      oldWidget.pdf.removeListener(_onTick);
       widget.pdf.renderTick.addListener(_onTick);
+      widget.pdf.addListener(_onTick);
       _dropRetained();
       _image = null;
       _requestedScale = 0;
@@ -97,7 +103,11 @@ class _PdfPageTileState extends State<PdfPageTile> {
     }
   }
 
-  void _onTick() => _request();
+  void _onTick() {
+    // A fresh document opened → give the render loop a clean slate.
+    if (widget.pdf.isOpen) _retries = 0;
+    _request();
+  }
 
   void _dropRetained() {
     final key = _retainedKey;
@@ -153,6 +163,7 @@ class _PdfPageTileState extends State<PdfPageTile> {
     _retryTimer?.cancel();
     _dropRetained();
     widget.pdf.renderTick.removeListener(_onTick);
+    widget.pdf.removeListener(_onTick);
     widget.viewport.renderTick.removeListener(_onTick);
     super.dispose();
   }

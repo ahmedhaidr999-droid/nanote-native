@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../../controllers/library_controller.dart';
 import '../../i18n/strings.dart';
@@ -10,8 +11,9 @@ import '../../models/paper.dart';
 import '../../persistence/file_store.dart';
 import '../../persistence/library_repository.dart';
 import '../../theme/nanote_theme.dart';
+import '../widgets/cover_art.dart';
 
-/// Fixed 8-color row used by the tag / folder / tab pickers.
+/// Fixed 8-color row used by the tab picker.
 const List<Color> kPickerColors = [
   Color(0xFF1E6FF2),
   Color(0xFF0E7A5F),
@@ -65,7 +67,7 @@ class ColorDot extends StatelessWidget {
       child: selected
           ? Center(
               child: Icon(
-                Icons.check,
+                LucideIcons.check,
                 size: size * 0.45,
                 color: color.computeLuminance() > 0.5
                     ? const Color(0xFF16233A)
@@ -105,7 +107,7 @@ class TemplateChip extends StatelessWidget {
     final nc = nanoteColors(context);
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(NANOTE_RADIUS_SM),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -114,7 +116,7 @@ class TemplateChip extends StatelessWidget {
             height: 66,
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(NANOTE_RADIUS_SM),
               border: Border.all(
                 color: selected ? cs.primary : cs.outline,
                 width: selected ? 2 : 1,
@@ -219,7 +221,7 @@ class _TemplatePreviewPainter extends CustomPainter {
       case TemplateId.hex:
         const r = 7.0;
         final dx = math.sqrt(3) * r;
-        final dy = r * 1.5;
+        const dy = r * 1.5;
         var row = 0;
         for (var cy = 6.0; cy < h - 4; cy += dy) {
           final offset = row.isOdd ? dx / 2 : 0.0;
@@ -277,6 +279,159 @@ class _TemplatePreviewPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _TemplatePreviewPainter oldDelegate) =>
       oldDelegate.template != template;
+}
+
+// ---------------------------------------------------------------------------
+// Sheet / dialog scaffolding
+// ---------------------------------------------------------------------------
+
+/// Nanote bottom-sheet scaffold: rounded top (16), ink-2 floating shadow and
+/// a slim drag handle. Show with `showModalBottomSheet(backgroundColor:
+/// Colors.transparent, showDragHandle: false)`.
+class NanoteSheet extends StatelessWidget {
+  const NanoteSheet({super.key, required this.child, this.title});
+
+  final Widget child;
+
+  /// Optional bold sheet title under the drag handle.
+  final String? title;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final nc = nanoteColors(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(NANOTE_RADIUS_LG),
+        ),
+        boxShadow: nc.inkShadow2,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: 10),
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: nc.mutedFg.withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          if (title != null)
+            Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(20, 14, 20, 10),
+              child: Text(
+                title!,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+            ),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+/// A 52px-tall sheet/menu row: leading icon on an accent tile + bold label.
+/// Destructive rows tint icon and label with the error color.
+Widget sheetActionRow(
+  BuildContext context, {
+  required IconData icon,
+  required String label,
+  required VoidCallback onTap,
+  bool destructive = false,
+}) {
+  final cs = Theme.of(context).colorScheme;
+  final nc = nanoteColors(context);
+  final fg = destructive ? cs.error : nc.secondaryFg;
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+    child: Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+        hoverColor: nc.accent,
+        splashColor: nc.accent,
+        highlightColor: nc.accent,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: destructive
+                      ? cs.error.withValues(alpha: 0.10)
+                      : nc.accent,
+                  borderRadius: BorderRadius.circular(NANOTE_RADIUS_MD),
+                ),
+                child:
+                    Icon(icon, size: 20, color: destructive ? cs.error : cs.primary),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: fg,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// Standard confirmation dialog (pill CTA; destructive confirm uses the
+/// error color on the filled button). Pops with `true` when confirmed.
+Future<bool> showConfirmDialog(
+  BuildContext context, {
+  required String title,
+  required String message,
+  String confirmKey = 'delete',
+  bool destructive = true,
+}) async {
+  final cs = Theme.of(context).colorScheme;
+  return await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(title),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(S.t('cancel')),
+            ),
+            FilledButton(
+              style: destructive
+                  ? FilledButton.styleFrom(
+                      backgroundColor: cs.error,
+                      foregroundColor: cs.onError,
+                    )
+                  : null,
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(S.t(confirmKey)),
+            ),
+          ],
+        ),
+      ) ==
+      true;
 }
 
 // ---------------------------------------------------------------------------
@@ -418,30 +573,43 @@ class NotebookFormFieldsState extends State<NotebookFormFields> {
   Widget _coverChip(BuildContext context, CoverDef cover) {
     final cs = Theme.of(context).colorScheme;
     final selected = _coverId == cover.id && _coverImagePath == null;
-    return InkWell(
+    return Pressable(
       onTap: () => setState(() {
         _coverId = cover.id;
         _coverImagePath = null;
       }),
-      borderRadius: BorderRadius.circular(8),
       child: Container(
         width: 52,
         height: 68,
+        padding: const EdgeInsets.all(2.5),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          gradient: LinearGradient(
-            colors: cover.colors,
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
+          borderRadius: BorderRadius.circular(NANOTE_RADIUS_SM),
           border: Border.all(
-            color: selected ? cs.primary : cs.outline,
-            width: selected ? 2.5 : 1,
+            color: selected ? cs.primary : Colors.transparent,
+            width: 2.5,
           ),
         ),
-        child: selected
-            ? const Center(child: Icon(Icons.check, color: Colors.white, size: 20))
-            : null,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(NANOTE_RADIUS_SM),
+              child: CoverArt(cover: cover, borderRadius: NANOTE_RADIUS_SM),
+            ),
+            if (selected)
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: const BoxDecoration(
+                    color: Colors.black54,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(LucideIcons.check,
+                      color: Colors.white, size: 16),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -470,61 +638,69 @@ class NotebookFormFieldsState extends State<NotebookFormFields> {
     } else {
       inner = _customCoverPlaceholder(context);
     }
-    return InkWell(
+    return Pressable(
       onTap: _pickCoverImage,
-      borderRadius: BorderRadius.circular(8),
       child: Container(
         width: 52,
         height: 68,
-        clipBehavior: Clip.antiAlias,
+        padding: const EdgeInsets.all(2.5),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(NANOTE_RADIUS_SM),
           border: Border.all(
-            color: selected ? cs.primary : cs.outline,
-            width: selected ? 2.5 : 1,
+            color: selected ? cs.primary : Colors.transparent,
+            width: 2.5,
           ),
-          color: cs.secondary,
         ),
-        child: selected
-            ? Stack(
-                fit: StackFit.expand,
-                children: [
-                  inner,
-                  Center(
-                    child: Container(
-                      padding: const EdgeInsets.all(3),
-                      decoration: const BoxDecoration(
-                        color: Colors.black54,
-                        shape: BoxShape.circle,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(NANOTE_RADIUS_SM),
+          child: SizedBox(
+            width: 47,
+            height: 63,
+            child: selected
+                ? Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      inner,
+                      Center(
+                        child: Container(
+                          padding: const EdgeInsets.all(3),
+                          decoration: const BoxDecoration(
+                            color: Colors.black54,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(LucideIcons.check,
+                              color: Colors.white, size: 16),
+                        ),
                       ),
-                      child: const Icon(Icons.check,
-                          color: Colors.white, size: 16),
-                    ),
-                  ),
-                ],
-              )
-            : inner,
+                    ],
+                  )
+                : inner,
+          ),
+        ),
       ),
     );
   }
 
   Widget _customCoverPlaceholder(BuildContext context) {
     final nc = nanoteColors(context);
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Icon(Icons.add_photo_alternate_outlined, size: 20, color: nc.mutedFg),
-        const SizedBox(height: 4),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 3),
-          child: Text(
-            S.t('coverCustom'),
-            maxLines: 1,
-            overflow: TextOverflow.clip,
-            style: TextStyle(fontSize: 9, color: nc.mutedFg),
+    return ColoredBox(
+      color: nc.surfaceVariant,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(LucideIcons.image_plus, size: 20, color: nc.mutedFg),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 3),
+            child: Text(
+              S.t('coverCustom'),
+              maxLines: 1,
+              overflow: TextOverflow.clip,
+              style: TextStyle(fontSize: 9, color: nc.mutedFg),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -532,16 +708,6 @@ class NotebookFormFieldsState extends State<NotebookFormFields> {
 // ---------------------------------------------------------------------------
 // Dialogs / sheets
 // ---------------------------------------------------------------------------
-
-Widget _sheetHeader(BuildContext context, String key) {
-  return Padding(
-    padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-    child: Text(
-      S.t(key),
-      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-    ),
-  );
-}
 
 /// Small pill chip used for breadcrumbs and folder chips.
 Widget _pill(
@@ -554,26 +720,23 @@ Widget _pill(
 }) {
   final cs = Theme.of(context).colorScheme;
   final nc = nanoteColors(context);
-  return InkWell(
+  final bg = highlighted ? nc.accent : nc.surfaceVariant;
+  final fg = highlighted ? cs.primary : nc.secondaryFg;
+  return Pressable(
     onTap: onTap,
     onLongPress: onLongPress,
-    borderRadius: BorderRadius.circular(999),
+    enabled: onTap != null || onLongPress != null,
     child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: highlighted ? cs.primary : cs.secondary,
+        color: bg,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: highlighted ? cs.primary : cs.outline,
-        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[
-            Icon(icon,
-                size: 14,
-                color: highlighted ? cs.onPrimary : nc.secondaryFg),
+            Icon(icon, size: 14, color: fg),
             const SizedBox(width: 4),
           ],
           Flexible(
@@ -584,7 +747,7 @@ Widget _pill(
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: highlighted ? cs.onPrimary : nc.secondaryFg,
+                color: fg,
               ),
             ),
           ),
@@ -604,53 +767,57 @@ Future<NotebookEntity?> showCreateNotebookSheet(
   return showModalBottomSheet<NotebookEntity>(
     context: context,
     isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    showDragHandle: false,
     builder: (context) {
       return StatefulBuilder(
         builder: (context, setSheet) {
-          return Padding(
-            padding:
-                EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: MediaQuery.of(context).size.height * 0.85,
-              ),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _sheetHeader(context, 'newNotebook'),
-                    NotebookFormFields(
-                      key: key,
-                      onValidityChanged: (_) => setSheet(() {}),
-                    ),
-                    const SizedBox(height: 20),
-                    FilledButton(
-                      onPressed:
-                          (key.currentState?.canCreate ?? false)
-                              ? () async {
-                                  final state = key.currentState;
-                                  if (state == null) return;
-                                  final nb =
-                                      await LibraryController.I.createNotebook(
-                                    title: state.title,
-                                    coverId: state.coverId,
-                                    coverImagePath: state.coverImagePath,
-                                    folderId: folderId ??
-                                        LibraryController.I.currentFolderId,
-                                    template: state.template,
-                                    pageSize: state.pageSize,
-                                    paperColor: state.paperColor,
-                                  );
-                                  if (context.mounted) {
-                                    Navigator.pop(context, nb);
+          return NanoteSheet(
+            title: S.t('newNotebook'),
+            child: Padding(
+              padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(context).viewInsets.bottom),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.85,
+                ),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsetsDirectional.fromSTEB(20, 0, 20, 20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      NotebookFormFields(
+                        key: key,
+                        onValidityChanged: (_) => setSheet(() {}),
+                      ),
+                      const SizedBox(height: 20),
+                      FilledButton(
+                        onPressed:
+                            (key.currentState?.canCreate ?? false)
+                                ? () async {
+                                    final state = key.currentState;
+                                    if (state == null) return;
+                                    final nb =
+                                        await LibraryController.I.createNotebook(
+                                      title: state.title,
+                                      coverId: state.coverId,
+                                      coverImagePath: state.coverImagePath,
+                                      folderId: folderId ??
+                                          LibraryController.I.currentFolderId,
+                                      template: state.template,
+                                      pageSize: state.pageSize,
+                                      paperColor: state.paperColor,
+                                    );
+                                    if (context.mounted) {
+                                      Navigator.pop(context, nb);
+                                    }
                                   }
-                                }
-                              : null,
-                      child: Text(S.t('create')),
-                    ),
-                  ],
+                                : null,
+                        child: Text(S.t('create')),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -709,98 +876,122 @@ Future<void> showMoveToFolderSheet(
   await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    showDragHandle: false,
     builder: (context) => ListenableBuilder(
       listenable: c,
       builder: (context, _) {
+        final nc = nanoteColors(context);
         final children = c.childFolders(c.currentFolderId);
         return SafeArea(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.75,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _sheetHeader(context, 'moveTo'),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-                  child: Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: _breadcrumbChips(context, c),
+          child: NanoteSheet(
+            title: S.t('moveTo'),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.75,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding:
+                        const EdgeInsetsDirectional.fromSTEB(20, 0, 20, 8),
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: _breadcrumbChips(context, c),
+                    ),
                   ),
-                ),
-                const Divider(height: 1),
-                Flexible(
-                  child: children.isEmpty
-                      ? const SizedBox.shrink()
-                      : ListView(
-                          shrinkWrap: true,
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          children: [
-                            for (final f in children)
-                              ListTile(
-                                leading: Text(
-                                  f.emoji,
-                                  style: const TextStyle(fontSize: 22),
+                  const Divider(height: 1),
+                  Flexible(
+                    child: children.isEmpty
+                        ? Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Text(
+                              S.t('emptyLibraryHint'),
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                  fontSize: 13, color: nc.mutedFg),
+                            ),
+                          )
+                        : ListView(
+                            shrinkWrap: true,
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            children: [
+                              for (final f in children)
+                                ListTile(
+                                  leading: Text(
+                                    f.emoji,
+                                    style: const TextStyle(fontSize: 22),
+                                  ),
+                                  title: Text(
+                                    f.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  trailing: _dirChevron(context),
+                                  onTap: () => c.enterFolder(f.id),
                                 ),
-                                title: Text(
-                                  f.name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                trailing:
-                                    const Icon(Icons.chevron_right),
-                                onTap: () => c.enterFolder(f.id),
-                              ),
-                          ],
-                        ),
-                ),
-                const Divider(height: 1),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () async {
-                            await c.moveNotebook(n, null);
-                            if (context.mounted) Navigator.pop(context);
-                          },
-                          icon: const Icon(Icons.folder_off),
-                          label: Text(S.t('noFolder')),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        onPressed: () => showCreateFolderDialog(
-                          context,
-                          parentId: c.currentFolderId,
-                        ),
-                        icon: const Icon(Icons.create_new_folder_outlined),
-                        tooltip: S.t('newFolder'),
-                      ),
-                    ],
+                            ],
+                          ),
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-                  child: FilledButton.icon(
-                    onPressed: () async {
-                      await c.moveNotebook(n, c.currentFolderId);
-                      if (context.mounted) Navigator.pop(context);
-                    },
-                    icon: const Icon(Icons.drive_file_move_outlined),
-                    label: Text(S.t('moveTo')),
+                  const Divider(height: 1),
+                  Padding(
+                    padding:
+                        const EdgeInsetsDirectional.fromSTEB(20, 12, 20, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              await c.moveNotebook(n, null);
+                              if (context.mounted) Navigator.pop(context);
+                            },
+                            icon: const Icon(LucideIcons.folder_x, size: 20),
+                            label: Text(S.t('noFolder')),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          onPressed: () => showCreateFolderDialog(
+                            context,
+                            parentId: c.currentFolderId,
+                          ),
+                          icon: const Icon(LucideIcons.folder_plus, size: 20),
+                          tooltip: S.t('newFolder'),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                  Padding(
+                    padding:
+                        const EdgeInsetsDirectional.fromSTEB(20, 0, 20, 16),
+                    child: FilledButton.icon(
+                      onPressed: () async {
+                        await c.moveNotebook(n, c.currentFolderId);
+                        if (context.mounted) Navigator.pop(context);
+                      },
+                      icon: const Icon(LucideIcons.folder_input, size: 20),
+                      label: Text(S.t('moveTo')),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         );
       },
     ),
+  );
+}
+
+/// A chevron pointing "forward" (flips with the text direction).
+Widget _dirChevron(BuildContext context) {
+  final flip = Directionality.of(context) == TextDirection.rtl;
+  return Icon(
+    flip ? LucideIcons.chevron_left : LucideIcons.chevron_right,
+    size: 20,
   );
 }
 
@@ -826,7 +1017,7 @@ List<Widget> _breadcrumbChips(BuildContext context, LibraryController c) {
     _pill(
       context,
       label: S.t('rootFolder'),
-      icon: Icons.home_outlined,
+      icon: LucideIcons.house,
       highlighted: c.currentFolderId == null,
       onTap:
           c.currentFolderId == null ? null : () => c.enterFolder(null),
@@ -844,15 +1035,17 @@ List<Widget> _breadcrumbChips(BuildContext context, LibraryController c) {
   return widgets;
 }
 
-/// Tag editor: toggle assignment, create tags (name + fixed 8-color row),
+/// Tag editor: toggle assignment, create tags (name + [TAG_COLORS] row),
 /// delete tags (with confirm).
 Future<void> showTagEditor(BuildContext context, NotebookEntity n) async {
   final c = LibraryController.I;
   final nameCtrl = TextEditingController();
-  var color = kPickerColors.first;
+  var color = TAG_COLORS.first;
   await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    showDragHandle: false,
     builder: (context) => StatefulBuilder(
       builder: (context, setSheet) => ListenableBuilder(
         listenable: c,
@@ -860,146 +1053,197 @@ Future<void> showTagEditor(BuildContext context, NotebookEntity n) async {
           final cs = Theme.of(context).colorScheme;
           final nc = nanoteColors(context);
           return SafeArea(
-            child: Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
-              ),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.8,
+            child: NanoteSheet(
+              title: S.t('assignTags'),
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(context).viewInsets.bottom,
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _sheetHeader(context, 'assignTags'),
-                    Flexible(
-                      child: c.tags.isEmpty
-                          ? Padding(
-                              padding: const EdgeInsets.all(20),
-                              child: Text(
-                                S.t('untagged'),
-                                textAlign: TextAlign.center,
-                                style:
-                                    TextStyle(fontSize: 13, color: nc.mutedFg),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.8,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Flexible(
+                        child: c.tags.isEmpty
+                            ? Padding(
+                                padding: const EdgeInsets.all(20),
+                                child: Text(
+                                  S.t('untagged'),
+                                  textAlign: TextAlign.center,
+                                  style:
+                                      TextStyle(fontSize: 13, color: nc.mutedFg),
+                                ),
+                              )
+                            : ListView(
+                                shrinkWrap: true,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 4),
+                                children: [
+                                  for (final t in c.tags)
+                                    ListTile(
+                                      leading:
+                                          ColorDot(color: Color(t.color), size: 22),
+                                      title: Text(
+                                        t.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      trailing: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          IconButton(
+                                            icon: const Icon(LucideIcons.trash,
+                                                size: 20),
+                                            tooltip: S.t('delete'),
+                                            onPressed: () async {
+                                              final ok = await showConfirmDialog(
+                                                context,
+                                                title: S.t('delete'),
+                                                message: t.name,
+                                              );
+                                              if (ok) await c.deleteTag(t);
+                                            },
+                                          ),
+                                          Icon(
+                                            n.tagIds.contains(t.id)
+                                                ? LucideIcons.circle_check
+                                                : LucideIcons.circle,
+                                            size: 22,
+                                            color: n.tagIds.contains(t.id)
+                                                ? cs.primary
+                                                : nc.mutedFg,
+                                          ),
+                                        ],
+                                      ),
+                                      onTap: () => n.tagIds.contains(t.id)
+                                          ? c.unassignTag(n, t)
+                                          : c.assignTag(n, t),
+                                    ),
+                                ],
                               ),
-                            )
-                          : ListView(
-                              shrinkWrap: true,
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 4),
-                              children: [
-                                for (final t in c.tags)
-                                  ListTile(
-                                    leading:
-                                        ColorDot(color: Color(t.color), size: 22),
-                                    title: Text(
-                                      t.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    trailing: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        IconButton(
-                                          icon: const Icon(Icons.delete_outline),
-                                          tooltip: S.t('delete'),
-                                          onPressed: () async {
-                                            final ok = await showDialog<bool>(
-                                              context: context,
-                                              builder: (context) =>
-                                                  AlertDialog(
-                                                title: Text(S.t('delete')),
-                                                content: Text(t.name),
-                                                actions: [
-                                                  TextButton(
-                                                    onPressed: () =>
-                                                        Navigator.pop(
-                                                            context, false),
-                                                    child: Text(S.t('cancel')),
-                                                  ),
-                                                  FilledButton(
-                                                    onPressed: () =>
-                                                        Navigator.pop(
-                                                            context, true),
-                                                    child: Text(S.t('delete')),
-                                                  ),
-                                                ],
-                                              ),
-                                            );
-                                            if (ok == true) await c.deleteTag(t);
-                                          },
-                                        ),
-                                        Icon(
-                                          n.tagIds.contains(t.id)
-                                              ? Icons.check_circle
-                                              : Icons.radio_button_unchecked,
-                                          color:
-                                              n.tagIds.contains(t.id)
-                                                  ? cs.primary
-                                                  : nc.mutedFg,
-                                        ),
-                                      ],
-                                    ),
-                                    onTap: () => n.tagIds.contains(t.id)
-                                        ? c.unassignTag(n, t)
-                                        : c.assignTag(n, t),
-                                  ),
-                              ],
-                            ),
-                    ),
-                    const Divider(height: 1),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
-                      child: Text(
-                        S.t('newTag'),
-                        style: const TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w700),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: TextField(
-                        controller: nameCtrl,
-                        decoration: InputDecoration(hintText: S.t('tagName')),
+                      const Divider(height: 1),
+                      Padding(
+                        padding:
+                            const EdgeInsetsDirectional.fromSTEB(20, 12, 20, 4),
+                        child: Text(
+                          S.t('newTag'),
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w700),
+                        ),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          for (final col in kPickerColors)
-                            ColorDot(
-                              color: col,
-                              selected: col == color,
-                              onTap: () => setSheet(() => color = col),
-                            ),
-                        ],
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: TextField(
+                          controller: nameCtrl,
+                          decoration: InputDecoration(hintText: S.t('tagName')),
+                        ),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-                      child: FilledButton.tonalIcon(
-                        onPressed: () async {
-                          final name = nameCtrl.text.trim();
-                          if (name.isEmpty) return;
-                          final t =
-                              await c.createTag(name, color.toARGB32());
-                          await c.assignTag(n, t);
-                          nameCtrl.clear();
-                        },
-                        icon: const Icon(Icons.add),
-                        label: Text(S.t('newTag')),
+                      Padding(
+                        padding:
+                            const EdgeInsetsDirectional.fromSTEB(20, 10, 20, 0),
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final col in TAG_COLORS)
+                              ColorDot(
+                                color: col,
+                                selected: col == color,
+                                onTap: () => setSheet(() => color = col),
+                              ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                      Padding(
+                        padding:
+                            const EdgeInsetsDirectional.fromSTEB(20, 12, 20, 20),
+                        child: FilledButton.tonalIcon(
+                          onPressed: () async {
+                            final name = nameCtrl.text.trim();
+                            if (name.isEmpty) return;
+                            final t =
+                                await c.createTag(name, color.toARGB32());
+                            await c.assignTag(n, t);
+                            nameCtrl.clear();
+                          },
+                          icon: const Icon(LucideIcons.plus, size: 20),
+                          label: Text(S.t('newTag')),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
           );
         },
+      ),
+    ),
+  );
+  nameCtrl.dispose();
+}
+
+/// Standalone tag creation sheet (Tags tab): name + [TAG_COLORS].
+Future<void> showCreateTagSheet(BuildContext context) async {
+  final c = LibraryController.I;
+  final nameCtrl = TextEditingController();
+  var color = TAG_COLORS.first;
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    showDragHandle: false,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setSheet) => Padding(
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: NanoteSheet(
+          title: S.t('newTag'),
+          child: Padding(
+            padding:
+                const EdgeInsetsDirectional.fromSTEB(20, 0, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  autofocus: true,
+                  decoration: InputDecoration(hintText: S.t('tagName')),
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final col in TAG_COLORS)
+                      ColorDot(
+                        color: col,
+                        selected: col == color,
+                        onTap: () => setSheet(() => color = col),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: () async {
+                    final name = nameCtrl.text.trim();
+                    if (name.isEmpty) return;
+                    await c.createTag(name, color.toARGB32());
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  icon: const Icon(LucideIcons.plus, size: 20),
+                  label: Text(S.t('create')),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     ),
   );
@@ -1015,98 +1259,104 @@ Future<void> showNotebookMenuSheet(
   final c = LibraryController.I;
   final action = await showModalBottomSheet<String>(
     context: context,
+    backgroundColor: Colors.transparent,
+    showDragHandle: false,
     builder: (context) {
-      final cs = Theme.of(context).colorScheme;
       final nc = nanoteColors(context);
-      final destructive = cs.error;
       return SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-              child: Row(
-                children: [
-                  _menuCoverThumb(n),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          n.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 15),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '${S.num(c.pageCountOf(n.id) ?? 0)} ${S.t('pagesCount')}',
-                          style:
-                              TextStyle(fontSize: 12, color: nc.mutedFg),
-                        ),
-                      ],
+        child: NanoteSheet(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding:
+                    const EdgeInsetsDirectional.fromSTEB(20, 12, 20, 12),
+                child: Row(
+                  children: [
+                    _menuCoverThumb(n),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            n.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w700, fontSize: 15),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${S.num(c.pageCountOf(n.id) ?? 0)} ${S.t('pagesCount')}',
+                            style:
+                                TextStyle(fontSize: 12, color: nc.mutedFg),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            if (n.deleted) ...[
-              ListTile(
-                leading: const Icon(Icons.restore),
-                title: Text(S.t('restore')),
-                onTap: () => Navigator.pop(context, 'restore'),
-              ),
-              ListTile(
-                leading: Icon(Icons.delete_forever, color: destructive),
-                title: Text(
-                  S.t('purge'),
-                  style: TextStyle(color: destructive),
+                  ],
                 ),
-                onTap: () => Navigator.pop(context, 'purge'),
               ),
-            ] else ...[
-              ListTile(
-                leading: const Icon(Icons.auto_stories_outlined),
-                title: Text(S.t('open')),
-                onTap: () => Navigator.pop(context, 'open'),
-              ),
-              ListTile(
-                leading: Icon(
-                    n.favorite ? Icons.star : Icons.star_border),
-                title:
-                    Text(S.t(n.favorite ? 'unfavorite' : 'favorite')),
-                onTap: () => Navigator.pop(context, 'favorite'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.edit_outlined),
-                title: Text(S.t('rename')),
-                onTap: () => Navigator.pop(context, 'rename'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.drive_file_move_outlined),
-                title: Text(S.t('moveTo')),
-                onTap: () => Navigator.pop(context, 'move'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.label_outline),
-                title: Text(S.t('assignTags')),
-                onTap: () => Navigator.pop(context, 'tags'),
-              ),
-              ListTile(
-                leading: Icon(Icons.delete_outline, color: destructive),
-                title: Text(
-                  S.t('delete'),
-                  style: TextStyle(color: destructive),
+              const Divider(height: 1),
+              const SizedBox(height: 6),
+              if (n.deleted) ...[
+                sheetActionRow(
+                  context,
+                  icon: LucideIcons.rotate_ccw,
+                  label: S.t('restore'),
+                  onTap: () => Navigator.pop(context, 'restore'),
                 ),
-                onTap: () => Navigator.pop(context, 'delete'),
-              ),
+                sheetActionRow(
+                  context,
+                  icon: LucideIcons.flame,
+                  label: S.t('purge'),
+                  destructive: true,
+                  onTap: () => Navigator.pop(context, 'purge'),
+                ),
+              ] else ...[
+                sheetActionRow(
+                  context,
+                  icon: LucideIcons.book_open,
+                  label: S.t('open'),
+                  onTap: () => Navigator.pop(context, 'open'),
+                ),
+                sheetActionRow(
+                  context,
+                  icon: LucideIcons.star,
+                  label: S.t(n.favorite ? 'unfavorite' : 'favorite'),
+                  onTap: () => Navigator.pop(context, 'favorite'),
+                ),
+                sheetActionRow(
+                  context,
+                  icon: LucideIcons.pencil,
+                  label: S.t('rename'),
+                  onTap: () => Navigator.pop(context, 'rename'),
+                ),
+                sheetActionRow(
+                  context,
+                  icon: LucideIcons.folder_input,
+                  label: S.t('moveTo'),
+                  onTap: () => Navigator.pop(context, 'move'),
+                ),
+                sheetActionRow(
+                  context,
+                  icon: LucideIcons.tag,
+                  label: S.t('assignTags'),
+                  onTap: () => Navigator.pop(context, 'tags'),
+                ),
+                sheetActionRow(
+                  context,
+                  icon: LucideIcons.trash,
+                  label: S.t('delete'),
+                  destructive: true,
+                  onTap: () => Navigator.pop(context, 'delete'),
+                ),
+              ],
+              const SizedBox(height: 8),
             ],
-            const SizedBox(height: 8),
-          ],
+          ),
         ),
       );
     },
@@ -1137,42 +1387,27 @@ Future<void> showNotebookMenuSheet(
       await c.restoreNotebook(n);
       break;
     case 'purge':
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(S.t('purge')),
-          content: Text(S.t('confirmDeleteNotebook')),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(S.t('cancel')),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(S.t('delete')),
-            ),
-          ],
-        ),
+      final ok = await showConfirmDialog(
+        context,
+        title: S.t('purge'),
+        message: S.t('confirmDeleteNotebook'),
       );
-      if (ok == true) await c.purgeNotebook(n);
+      if (ok) await c.purgeNotebook(n);
       break;
   }
 }
 
 Widget _menuCoverThumb(NotebookEntity n) {
   final cover = coverById(n.coverId) ?? BUILTIN_COVERS.first;
-  return Container(
+  return SizedBox(
     width: 28,
     height: 38,
-    decoration: BoxDecoration(
-      borderRadius: BorderRadius.circular(4),
-      gradient: LinearGradient(colors: cover.colors),
-    ),
+    child: CoverArt(cover: cover, borderRadius: 6),
   );
 }
 
-/// Folder creation dialog (name + emoji + color). The folder is created
-/// inside the folder the user is currently browsing.
+/// Folder creation dialog (name + emoji + color from [FOLDER_COLORS]). The
+/// folder is created inside the folder the user is currently browsing.
 Future<FolderEntity?> showCreateFolderDialog(
   BuildContext context, {
   int? parentId,
@@ -1180,7 +1415,7 @@ Future<FolderEntity?> showCreateFolderDialog(
   final c = LibraryController.I;
   final nameCtrl = TextEditingController();
   var emoji = kEmojiChoices.first;
-  var color = kPickerColors.first;
+  var color = FOLDER_COLORS.first;
   final result = await showDialog<FolderEntity>(
     context: context,
     builder: (context) => StatefulBuilder(
@@ -1214,13 +1449,14 @@ Future<FolderEntity?> showCreateFolderDialog(
                   for (final e in kEmojiChoices)
                     InkWell(
                       onTap: () => setD(() => emoji = e),
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(NANOTE_RADIUS_SM),
                       child: Container(
                         width: 40,
                         height: 40,
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius:
+                              BorderRadius.circular(NANOTE_RADIUS_SM),
                           border: Border.all(
                             color: emoji == e
                                 ? Theme.of(context).colorScheme.primary
@@ -1239,7 +1475,7 @@ Future<FolderEntity?> showCreateFolderDialog(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  for (final col in kPickerColors)
+                  for (final col in FOLDER_COLORS)
                     ColorDot(
                       color: col,
                       selected: col == color,

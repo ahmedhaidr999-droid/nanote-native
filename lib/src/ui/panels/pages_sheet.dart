@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../../controllers/pdf_document_controller.dart';
 import '../../controllers/stroke_engine.dart';
@@ -19,7 +20,13 @@ import '../../workspace/elements_painter.dart';
 /// * Long-press → multi-SELECT mode; tap more pages to extend the selection.
 /// * Selection actions: export (PDF of the selection / PNG when single),
 ///   rename, duplicate, move up/down, bookmark, delete (with confirm).
-/// * Add page (+) appends a new page after the last one.
+/// * Add page (+ tile at the end of the grid, plus the header button)
+///   appends a new page after the last one.
+///
+/// v1.9.1 restyle: rounded-lg thumbnails with 2px borders (primary for the
+/// active page) + ink-1 shadows, pill page-number badge at the bottom-end
+/// corner, 8px warning bookmark dot at the top-start corner, a dashed
+/// "add page" tile and pill action buttons.
 Future<void> showPagesSheet(
   BuildContext context,
   StrokeEngine engine, {
@@ -232,24 +239,30 @@ class _PagesSheetState extends State<_PagesSheet> {
         children: [
           // Header.
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 6, 8, 4),
+            padding: const EdgeInsetsDirectional.fromSTEB(12, 6, 4, 4),
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
-                    _selectMode
-                        ? '${S.num(_selected.length)} / ${S.num(widget.engine.pages.length)}'
-                        : S.t('pagesManager'),
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w700),
+                  child: Padding(
+                    padding:
+                        const EdgeInsetsDirectional.only(start: 8),
+                    child: Text(
+                      _selectMode
+                          ? '${S.num(_selected.length)} / ${S.num(widget.engine.pages.length)}'
+                          : S.t('pagesManager'),
+                      style: nanoteText(TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.onSurface,
+                      )),
+                    ),
                   ),
                 ),
                 if (_selectMode) ...[
                   IconButton(
                     tooltip: S.t('selectAll'),
-                    icon: const Icon(Icons.select_all),
+                    icon: Icon(LucideIcons.square_check_big,
+                        size: 20, color: colors.mutedFg),
                     onPressed: () => setState(() {
                       _selected
                         ..clear()
@@ -258,13 +271,15 @@ class _PagesSheetState extends State<_PagesSheet> {
                   ),
                   IconButton(
                     tooltip: S.t('close'),
-                    icon: const Icon(Icons.close),
+                    icon:
+                        Icon(LucideIcons.x, size: 20, color: colors.mutedFg),
                     onPressed: _exitSelectMode,
                   ),
                 ] else ...[
                   IconButton(
                     tooltip: S.t('addPage'),
-                    icon: const Icon(Icons.add),
+                    icon: Icon(LucideIcons.plus,
+                        size: 20, color: colors.mutedFg),
                     onPressed: () => unawaited(_addPage()),
                   ),
                 ],
@@ -292,33 +307,35 @@ class _PagesSheetState extends State<_PagesSheet> {
                         crossAxisSpacing: 14,
                         childAspectRatio: 0.72,
                       ),
-                      itemCount: pages.length,
-                      itemBuilder: (context, i) => _PageCell(
-                        engine: widget.engine,
-                        meta: pages[i],
-                        index: i,
-                        total: pages.length,
-                        selected: _selected.contains(pages[i].id),
-                        selectMode: _selectMode,
-                        isCurrent: pages[i].id == widget.currentId,
-                        onTap: () {
-                          if (_selectMode) {
-                            _toggle(pages[i].id);
-                          } else {
-                            Navigator.of(context).pop(pages[i].id);
-                          }
-                        },
-                        onLongPress: () {
-                          if (!_selectMode) {
-                            setState(() {
-                              _selectMode = true;
-                              _selected.add(pages[i].id);
-                            });
-                          } else {
-                            _toggle(pages[i].id);
-                          }
-                        },
-                      ),
+                      itemCount: pages.length + 1,
+                      itemBuilder: (context, i) => i == pages.length
+                          ? _AddPageCell(onTap: () => unawaited(_addPage()))
+                          : _PageCell(
+                              engine: widget.engine,
+                              meta: pages[i],
+                              index: i,
+                              total: pages.length,
+                              selected: _selected.contains(pages[i].id),
+                              selectMode: _selectMode,
+                              isCurrent: pages[i].id == widget.currentId,
+                              onTap: () {
+                                if (_selectMode) {
+                                  _toggle(pages[i].id);
+                                } else {
+                                  Navigator.of(context).pop(pages[i].id);
+                                }
+                              },
+                              onLongPress: () {
+                                if (!_selectMode) {
+                                  setState(() {
+                                    _selectMode = true;
+                                    _selected.add(pages[i].id);
+                                  });
+                                } else {
+                                  _toggle(pages[i].id);
+                                }
+                              },
+                            ),
                     );
                   },
                 ),
@@ -358,28 +375,31 @@ class _PagesSheetState extends State<_PagesSheet> {
             top: false,
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
               child: Row(
                 children: [
-                  _action(Icons.picture_as_pdf, 'exportPdf', _exportSelectedPdf),
+                  _action(LucideIcons.file_text, 'exportPdf',
+                      _exportSelectedPdf),
                   if (single)
-                    _action(Icons.image_outlined, 'exportPng',
+                    _action(LucideIcons.image, 'exportPng',
                         () => _exportSelectedPng(metas.first)),
-                  if (single) _action(Icons.edit_outlined, 'rename', _renameSelected),
-                  _action(Icons.content_copy, 'duplicatePage',
+                  if (single)
+                    _action(LucideIcons.pencil, 'rename', _renameSelected),
+                  _action(LucideIcons.copy, 'duplicatePage',
                       _duplicateSelected),
                   if (single)
-                    _action(Icons.arrow_upward, 'moveUp',
-                        () => _moveSelected(-1)),
+                    _action(
+                        LucideIcons.arrow_up, 'moveUp', () => _moveSelected(-1)),
                   if (single)
-                    _action(Icons.arrow_downward, 'moveDown',
+                    _action(LucideIcons.arrow_down, 'moveDown',
                         () => _moveSelected(1)),
                   _action(
-                    allMarked ? Icons.bookmark : Icons.bookmark_border,
+                    LucideIcons.bookmark,
                     'bookmark',
                     _bookmarkSelected,
+                    marked: allMarked,
                   ),
-                  _action(Icons.delete_outline, 'deletePages', _deleteSelected,
+                  _action(LucideIcons.trash, 'deletePages', _deleteSelected,
                       destructive: true),
                 ],
               ),
@@ -389,29 +409,38 @@ class _PagesSheetState extends State<_PagesSheet> {
     return bar(context);
   }
 
+  /// Pill action button (44px target) with optional destructive tint.
   Widget _action(IconData icon, String label, Future<void> Function() onTap,
-      {bool destructive = false}) {
+      {bool destructive = false, bool marked = false}) {
     final scheme = Theme.of(context).colorScheme;
+    final colors = nanoteColors(context);
+    final fg = destructive
+        ? scheme.error
+        : (marked ? colors.warning : scheme.primary);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+      padding: const EdgeInsetsDirectional.symmetric(horizontal: 4),
+      child: Pressable(
         onTap: () => unawaited(onTap()),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+        child: Container(
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            color: destructive
+                ? scheme.error.withValues(alpha: 0.08)
+                : colors.accent,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(
             children: [
-              Icon(icon,
-                  size: 22,
-                  color: destructive ? scheme.error : scheme.primary),
-              const SizedBox(height: 2),
+              Icon(icon, size: 16, color: fg),
+              const SizedBox(width: 6),
               Text(
                 S.t(label),
-                style: TextStyle(
-                  fontSize: 10.5,
+                style: nanoteText(TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
                   color: destructive ? scheme.error : scheme.onSurface,
-                ),
+                )),
               ),
             ],
           ),
@@ -421,7 +450,100 @@ class _PagesSheetState extends State<_PagesSheet> {
   }
 }
 
-/// One grid cell: live mini preview + number + bookmark + selection overlay.
+/// Dashed "add page" tile: dashed rounded-rect border (border color) with a
+/// centered muted plus; tints to Nanote Blue while pressed.
+class _AddPageCell extends StatefulWidget {
+  const _AddPageCell({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  State<_AddPageCell> createState() => _AddPageCellState();
+}
+
+class _AddPageCellState extends State<_AddPageCell> {
+  bool _down = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tint = _down ? scheme.primary : scheme.outline;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => setState(() => _down = true),
+      onTapUp: (_) => setState(() => _down = false),
+      onTapCancel: () => setState(() => _down = false),
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        scale: _down ? 0.96 : 1.0,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          decoration: BoxDecoration(
+            color: _down
+                ? scheme.primary.withValues(alpha: 0.06)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(NANOTE_RADIUS_MD),
+          ),
+          padding: const EdgeInsets.all(6),
+          child: CustomPaint(
+            foregroundPainter: _DashedRRectPainter(
+              color: tint,
+              radius: NANOTE_RADIUS_MD,
+            ),
+            child: Center(
+              child: Icon(
+                LucideIcons.plus,
+                size: 24,
+                color: _down ? scheme.primary : nanoteColors(context).mutedFg,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Dashed rounded-rect stroke.
+class _DashedRRectPainter extends CustomPainter {
+  _DashedRRectPainter({required this.color, this.radius = NANOTE_RADIUS_MD});
+
+  final Color color;
+  final double radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+        Offset.zero & size,
+        Radius.circular(radius),
+      ));
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..color = color;
+    const dash = 6.0;
+    const gap = 5.0;
+    for (final metric in path.computeMetrics()) {
+      var dist = 0.0;
+      while (dist < metric.length) {
+        var next = dist + dash;
+        if (next > metric.length) next = metric.length;
+        canvas.drawPath(metric.extractPath(dist, next), paint);
+        dist = next + gap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DashedRRectPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.radius != radius;
+}
+
+/// One grid cell: live mini preview + number badge + bookmark dot +
+/// selection overlay.
 class _PageCell extends StatefulWidget {
   const _PageCell({
     required this.engine,
@@ -460,22 +582,19 @@ class _PageCellState extends State<_PageCell> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final colors = nanoteColors(context);
-    return InkWell(
-      borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+    final active = widget.selected || widget.isCurrent;
+    return Pressable(
       onTap: widget.onTap,
       onLongPress: widget.onLongPress,
       child: Container(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+          borderRadius: BorderRadius.circular(NANOTE_RADIUS_MD),
           border: Border.all(
-            color: widget.selected
-                ? scheme.primary
-                : widget.isCurrent
-                    ? scheme.primary.withValues(alpha: 0.55)
-                    : scheme.outline,
-            width: widget.selected ? 2.4 : 1.4,
+            color: active ? scheme.primary : scheme.outline,
+            width: 2,
           ),
           color: scheme.surface,
+          boxShadow: colors.inkShadow1,
         ),
         padding: const EdgeInsets.all(6),
         child: Column(
@@ -486,49 +605,54 @@ class _PageCellState extends State<_PageCell> {
                 children: [
                   Positioned.fill(
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(NANOTE_RADIUS_SM),
                       child: _thumb(colors),
                     ),
                   ),
-                  // Number badge.
-                  Positioned(
-                    top: 4,
-                    left: 4,
+                  // Number badge (bottom-end corner).
+                  PositionedDirectional(
+                    bottom: 6,
+                    end: 6,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 5, vertical: 1),
+                          horizontal: 6, vertical: 1.5),
                       decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.55),
-                        borderRadius: BorderRadius.circular(6),
+                        color: Colors.black.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(
                         S.num(widget.index + 1),
-                        style: const TextStyle(
+                        style: nanoteText(const TextStyle(
                           color: Colors.white,
-                          fontSize: 9.5,
+                          fontSize: 10,
                           fontWeight: FontWeight.w700,
-                        ),
+                        )),
                       ),
                     ),
                   ),
+                  // Bookmark dot (top-start corner).
                   if (widget.meta.bookmarked)
-                    Positioned(
-                      top: 3,
-                      right: 3,
-                      child: Icon(
-                        Icons.bookmark,
-                        size: 14,
-                        color: colors.warning,
-                        shadows: const [
-                          Shadow(blurRadius: 3, color: Colors.black45),
-                        ],
+                    PositionedDirectional(
+                      top: 6,
+                      start: 6,
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: colors.warning,
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.85),
+                            width: 1.5,
+                          ),
+                        ),
                       ),
                     ),
                   if (widget.selectMode)
-                    Positioned(
-                      top: 3,
-                      right: 3,
-                      child: _checkbox(scheme),
+                    PositionedDirectional(
+                      top: 5,
+                      end: 5,
+                      child: _checkbox(scheme, colors),
                     ),
                 ],
               ),
@@ -541,10 +665,10 @@ class _PageCellState extends State<_PageCell> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
-              style: TextStyle(
+              style: nanoteText(TextStyle(
                 fontSize: 10.5,
-                color: scheme.onSurfaceVariant,
-              ),
+                color: colors.mutedFg,
+              )),
             ),
           ],
         ),
@@ -552,17 +676,19 @@ class _PageCellState extends State<_PageCell> {
     );
   }
 
-  Widget _checkbox(ColorScheme scheme) {
+  Widget _checkbox(ColorScheme scheme, NanoteColors colors) {
     return Container(
       width: 22,
       height: 22,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: widget.selected ? scheme.primary : Colors.black.withValues(alpha: 0.4),
+        color: widget.selected
+            ? colors.accent
+            : Colors.black.withValues(alpha: 0.4),
         border: Border.all(color: Colors.white, width: 1.6),
       ),
       child: widget.selected
-          ? const Icon(Icons.check, size: 14, color: Colors.white)
+          ? const Icon(LucideIcons.check, size: 13, color: Colors.white)
           : null,
     );
   }
