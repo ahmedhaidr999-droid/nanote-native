@@ -90,12 +90,14 @@ a single in-flight page (Android requirement).
 ```bash
 flutter pub get
 dart run build_runner build --delete-conflicting-outputs   # isar codegen
-flutter create --platforms=android --org com.nanote --project-name nanote_native .
 flutter run            # or: flutter build apk --release
 ```
 
-The `android/` folder is generated, never committed. Toolchain: Flutter 3.29.x
-(the version Isar 3.1.0+1’s generator is verified against). CI pins 3.29.3.
+The `android/` folder is **committed**: Gradle 8.10.2 wrapper, AGP 8.7.3,
+Kotlin 2.1.0 (the Flutter 3.29.3 toolchain combo) plus the AGP-8 namespace
+injection that `isar_flutter_libs` 3.1.0+1 needs — see `android/build.gradle`.
+Toolchain: Flutter 3.29.x (the version Isar 3.1.0+1’s generator is verified
+against). CI pins 3.29.3.
 
 ## Notes & deliberate deviations
 
