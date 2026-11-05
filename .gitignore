@@ -7,8 +7,8 @@ build/
 .flutter-plugins
 .flutter-plugins-dependencies
 
-# Platform folders are generated in CI via `flutter create` — never commit.
-android/
+# The android/ platform folder is COMMITTED (Gradle wrapper + AGP-8
+# namespace injection for isar_flutter_libs). Other platforms are unused.
 ios/
 web/
 linux/

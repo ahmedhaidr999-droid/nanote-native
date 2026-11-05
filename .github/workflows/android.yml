@@ -47,26 +47,9 @@ jobs:
           rm -f test/widget_test.dart
           flutter test
 
-      # Platform folders are never committed (see .gitignore) — regenerate.
-      - name: Generate android platform folder
-        run: flutter create --platforms=android --org com.nanote --project-name nanote_native .
-
-      - name: Patch Android manifest & id
-        run: |
-          # Flutter 3.29 generates Kotlin DSL: android/app/build.gradle.kts.
-          # Only the applicationId changes — the namespace stays, so the
-          # generated MainActivity package keeps matching the manifest.
-          GRADLE=android/app/build.gradle.kts
-          sed -i 's/applicationId = "com\.nanote\.nanote_native"/applicationId = "com.nanote.native"/' "$GRADLE"
-          M=android/app/src/main/AndroidManifest.xml
-          sed -i 's/android:label="nanote_native"/android:label="Nanote Native"/' "$M"
-          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/><uses-permission android:name="android.permission.RECORD_AUDIO"/><application|' "$M"
-          # Flutter 3.29 defaults: minSdk 21, targetSdk 35 (newest fully
-          # supported by this toolchain). Bump to 36 with Flutter >= 3.35 +
-          # AGP 8.9.
-          echo "--- patched ---"
-          grep -n "applicationId\|targetSdk\|minSdk" "$GRADLE" || true
-          grep -n "label=\|uses-permission" "$M" || true
+      # The android/ platform folder is committed — including the Gradle
+      # wrapper and the AGP-8 namespace injection that isar_flutter_libs
+      # 3.1.0+1 needs (see android/build.gradle).
 
       - name: Build release APK
         run: flutter build apk --release --build-name=2.0.0 --build-number=${{ github.run_number }}
@@ -114,8 +97,13 @@ jobs:
           name: nanote-native-apk
           path: apk
 
+      - name: Rename APK
+        run: |
+          TAG="${GITHUB_REF_NAME#native-v}"
+          mv apk/app-release.apk "apk/nanote-native-${TAG}.apk"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: apk/app-release.apk
+          files: apk/nanote-native-*.apk
           generate_release_notes: true

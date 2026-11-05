@@ -1,0 +1,46 @@
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = "../build"
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
+
+// ---------------------------------------------------------------------------
+// Isar 3.1.0+1 (and other pre-AGP-8 plugins) compatibility.
+//
+// isar_flutter_libs predates AGP 8's required `namespace` DSL but still
+// declares `package` in its AndroidManifest.xml. Inject the manifest
+// package as the namespace for every Android plugin that lacks one, or
+// configuration fails with "Namespace not specified".
+// ---------------------------------------------------------------------------
+subprojects {
+    afterEvaluate { sub ->
+        if (sub.plugins.hasPlugin('com.android.library') ||
+                sub.plugins.hasPlugin('com.android.application')) {
+            def androidExt = sub.extensions.findByName('android')
+            if (androidExt != null &&
+                    (sub.android.namespace == null || sub.android.namespace == '')) {
+                def mf = sub.file('src/main/AndroidManifest.xml')
+                if (mf.exists()) {
+                    def pkg = new XmlSlurper().parse(mf).@package.text()
+                    if (pkg != null && pkg != '') {
+                        sub.android.namespace = pkg
+                        logger.lifecycle("Injected namespace '${pkg}' into ${sub.name}")
+                    }
+                }
+            }
+        }
+    }
+}
