@@ -47,7 +47,9 @@ android {
         // The published app id per the task book; the namespace keeps the
         // template's Kotlin package (com.nanote.nanote_native).
         applicationId = "com.nanote.native"
-        minSdk = Math.max(flutter.minSdkVersion, 21)
+        // Engine floor, raised to 23: record_android (audio notes, v6)
+        // declares minSdk 23 and fails manifest merge below that.
+        minSdk = Math.max(flutter.minSdkVersion, 23)
         // targetSdk 35: newest level fully supported by the Flutter 3.29
         // toolchain (see README — bump with Flutter >= 3.35 + AGP 8.9).
         targetSdk = 35
