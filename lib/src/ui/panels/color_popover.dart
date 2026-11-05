@@ -9,10 +9,9 @@ import '../../models/stroke.dart';
 import '../../models/tool.dart';
 import '../../theme/nanote_theme.dart';
 
-/// Color picker for the CURRENT pen: the 16-color ink palette (the 5
-/// highlighter colors when the highlighter is active), 5 favorite slots
-/// (long-press saves the current color), a custom hue/saturation wheel with a
-/// brightness slider, and the recent colors.
+/// Color picker for the CURRENT tool: palette (ink / highlighter / laser by
+/// scope), per-scope FAVORITE slots (tap to apply, star to save the picked
+/// color), the spectrum color wheel with a brightness slider, and recents.
 Future<void> showColorPopover(BuildContext context, ToolController tools) async {
   await showModalBottomSheet<void>(
     context: context,
@@ -21,28 +20,18 @@ Future<void> showColorPopover(BuildContext context, ToolController tools) async 
   );
 }
 
-StrokeKind _kindOf(Tool tool) {
-  switch (tool) {
-    case Tool.ballpoint:
-      return StrokeKind.ballpoint;
-    case Tool.brush:
-      return StrokeKind.brush;
-    case Tool.fineliner:
-      return StrokeKind.fineliner;
-    case Tool.highlighter:
-      return StrokeKind.highlighter;
-    case Tool.fountain:
-    case Tool.laser:
-    case Tool.eraser:
-    case Tool.lasso:
-    case Tool.text:
-    case Tool.shape:
-    case Tool.image:
-    case Tool.sticker:
-    case Tool.pan:
-      return StrokeKind.fountain;
-  }
-}
+/// Palette for a color scope.
+List<Color> paletteFor(ColorScope scope) => switch (scope) {
+      ColorScope.highlighter => HIGHLIGHTER_PALETTE,
+      ColorScope.laser => const [
+          Color(0xFFE5484D),
+          Color(0xFFF59E0B),
+          Color(0xFF10B981),
+          Color(0xFF0EA5E9),
+          Color(0xFF8B5CF6),
+        ],
+      ColorScope.pen => INK_PALETTE,
+    };
 
 class _ColorSheet extends StatefulWidget {
   const _ColorSheet({required this.tools});
@@ -54,21 +43,51 @@ class _ColorSheet extends StatefulWidget {
 }
 
 class _ColorSheetState extends State<_ColorSheet> {
-  late final StrokeKind _kind;
   late Color _selected;
   late HSVColor _hsv;
 
   @override
   void initState() {
     super.initState();
-    _kind = _kindOf(widget.tools.tool);
-    _selected = Color(widget.tools.pen(_kind).color);
+    _selected = Color(_currentToolColor());
     _hsv = HSVColor.fromColor(_selected);
   }
 
+  int _currentToolColor() {
+    final t = widget.tools;
+    switch (t.tool) {
+      case Tool.pen:
+        return t.pen(t.penKind.strokeKind).color;
+      case Tool.highlighter:
+        return t.pen(StrokeKind.highlighter).color;
+      case Tool.laser:
+        return t.laser.color;
+      case Tool.text:
+        return t.textColor;
+      case Tool.shape:
+        return t.shapeStrokeColor;
+      default:
+        return t.pen(t.penKind.strokeKind).color;
+    }
+  }
+
   void _apply(Color color) {
-    widget.tools.setPenColor(color.toARGB32());
-    widget.tools.addRecentColor(color.toARGB32());
+    final t = widget.tools;
+    final argb = color.toARGB32();
+    switch (t.tool) {
+      case Tool.laser:
+        t.laser.color = argb;
+        t.laser.tick();
+      case Tool.text:
+        t.setTextColor(argb);
+      case Tool.shape:
+        t.setShapeStrokeColor(argb);
+      case Tool.highlighter:
+        t.setPenColor(argb);
+      default:
+        t.setPenColor(argb);
+    }
+    t.addRecentColor(argb);
     Navigator.of(context).pop();
   }
 
@@ -87,8 +106,8 @@ class _ColorSheetState extends State<_ColorSheet> {
   Widget build(BuildContext context) {
     final tools = widget.tools;
     final cs = nanoteColors(context);
-    final palette =
-        _kind == StrokeKind.highlighter ? HIGHLIGHTER_PALETTE : INK_PALETTE;
+    final scope = tools.colorScope;
+    final palette = paletteFor(scope);
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -113,15 +132,7 @@ class _ColorSheetState extends State<_ColorSheet> {
                 ],
               ),
               const SizedBox(height: 16),
-              Text(S.t('favorites'),
-                  style: Theme.of(context).textTheme.titleSmall),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  for (var i = 0; i < 5; i++) _favoriteSlot(context, i, cs),
-                ],
-              ),
+              _favoritesRow(context, cs),
               const SizedBox(height: 16),
               Text(S.t('customColor'),
                   style: Theme.of(context).textTheme.titleSmall),
@@ -150,6 +161,43 @@ class _ColorSheetState extends State<_ColorSheet> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// Per-scope favorites + star toggle for the picked color.
+  Widget _favoritesRow(BuildContext context, NanoteColors cs) {
+    final tools = widget.tools;
+    final favs = tools.favoritesOf(tools.colorScope);
+    final isFav = favs.contains(_selected.toARGB32());
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(S.t('favorites'), style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            for (var i = 0; i < 8; i++)
+              Expanded(child: _favoriteSlot(context, i, favs, cs)),
+            const SizedBox(width: 6),
+            _starToggle(isFav, cs),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _starToggle(bool isFav, NanoteColors cs) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        tooltip: S.t(isFav ? 'removeFavorite' : 'addFavorite'),
+        onPressed: _toggleFavorite,
+        icon: Icon(isFav ? Icons.star : Icons.star_border, size: 24),
+        color: isFav ? scheme.primary : cs.mutedFg,
       ),
     );
   }
@@ -196,16 +244,14 @@ class _ColorSheetState extends State<_ColorSheet> {
     );
   }
 
-  Widget _favoriteSlot(BuildContext context, int i, NanoteColors cs) {
-    final favs = widget.tools.favoriteColors;
+  Widget _favoriteSlot(
+      BuildContext context, int i, List<int> favs, NanoteColors cs) {
     final has = i < favs.length;
     final color = has ? Color(favs[i]) : null;
     return InkWell(
       customBorder: const CircleBorder(),
       onTap: has ? () => _apply(color!) : _toggleFavorite,
-      onLongPress: _toggleFavorite,
       child: SizedBox(
-        width: 44,
         height: 44,
         child: Center(
           child: Container(
@@ -237,7 +283,7 @@ class _ColorSheetState extends State<_ColorSheet> {
         SizedBox(
           width: side,
           height: side,
-          child: _HueSatWheel(hsv: _hsv, onChanged: _setWheel),
+          child: ColorWheel(hsv: _hsv, onChanged: _setWheel),
         ),
         const SizedBox(width: 20),
         Expanded(
@@ -299,10 +345,11 @@ class _ColorSheetState extends State<_ColorSheet> {
       c.toARGB32().toRadixString(16).padLeft(8, '0').toUpperCase();
 }
 
-/// Draggable hue/saturation wheel: conic hue sweep + radial white overlay
-/// (saturation), with the current position shown as a thumb.
-class _HueSatWheel extends StatelessWidget {
-  const _HueSatWheel({required this.hsv, required this.onChanged});
+/// Draggable spectrum color wheel: conic hue sweep + radial white overlay
+/// (saturation), with the current position shown as a thumb. Shared by the
+/// color popover and the tool settings panel.
+class ColorWheel extends StatelessWidget {
+  const ColorWheel({super.key, required this.hsv, required this.onChanged});
 
   final HSVColor hsv;
   final ValueChanged<HSVColor> onChanged;

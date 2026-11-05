@@ -86,9 +86,72 @@ class _LibraryViewState extends State<LibraryView> {
         await c.setSection(LibrarySection.all);
       }
       messenger.showSnackBar(SnackBar(content: Text(S.t('pdfImported'))));
+      // Open the imported PDF right away.
+      await Navigator.pushNamed(context, '/notebook', arguments: nb.id);
+      if (mounted) unawaited(c.reload());
     } else {
       messenger.showSnackBar(SnackBar(content: Text(S.t('error'))));
     }
+  }
+
+  Future<void> _createFolder() async {
+    final c = LibraryController.I;
+    final folder = await showCreateFolderDialog(
+      context,
+      parentId: c.currentFolderId,
+    );
+    if (folder == null || !mounted) return;
+    await c.reload();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(S.t('folderCreated'))),
+      );
+    }
+  }
+
+  /// The + menu: new note, new folder, or import a PDF.
+  Future<void> _showCreateMenu() async {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
+    // Anchored above the FAB (bottom-end in LTR, bottom-start in RTL).
+    final left = isRtl ? 16.0 : overlay.size.width - 292;
+    final right = isRtl ? overlay.size.width - 292 : 16.0;
+    final action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(left, overlay.size.height - 268, right, 96),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      items: [
+        _menuItem('note', Icons.edit_note, 'newNotebook'),
+        _menuItem('folder', Icons.create_new_folder_outlined, 'newFolder'),
+        _menuItem('pdf', Icons.picture_as_pdf_outlined, 'importPdf'),
+      ],
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case 'note':
+        await _createNotebook();
+      case 'folder':
+        await _createFolder();
+      case 'pdf':
+        await _importPdf();
+    }
+  }
+
+  PopupMenuItem<String> _menuItem(String value, IconData icon, String label) {
+    return PopupMenuItem<String>(
+      value: value,
+      height: 52,
+      child: Row(
+        children: [
+          Icon(icon, size: 22),
+          const SizedBox(width: 14),
+          Text(
+            S.t(label),
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
   }
 
   // ------------------------------------------------------------------- build
@@ -117,11 +180,6 @@ class _LibraryViewState extends State<LibraryView> {
               _sortButton(context, c),
               _viewToggle(c),
               IconButton(
-                onPressed: _importPdf,
-                icon: const Icon(Icons.picture_as_pdf_outlined),
-                tooltip: S.t('importPdf'),
-              ),
-              IconButton(
                 onPressed: () => Navigator.pushNamed(context, '/settings'),
                 icon: const Icon(Icons.settings_outlined),
                 tooltip: S.t('settings'),
@@ -140,15 +198,43 @@ class _LibraryViewState extends State<LibraryView> {
                   ],
                 )
               : content,
+          // The + button opens the create menu: note / folder / PDF import.
           floatingActionButton: c.section == LibrarySection.trash
               ? null
-              : FloatingActionButton.extended(
-                  onPressed: _createNotebook,
-                  icon: const Icon(Icons.add),
-                  label: Text(S.t('newNotebook')),
-                ),
+              : _gradientFab(context),
         );
       },
+    );
+  }
+
+  /// Sky-gradient FAB — the app's lively hero element.
+  Widget _gradientFab(BuildContext context) {
+    final colors = nanoteColors(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: colors.brandGradient,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: colors.brandGradient.first.withValues(alpha: 0.45),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: FloatingActionButton(
+        elevation: 0,
+        highlightElevation: 0,
+        backgroundColor: Colors.transparent,
+        foregroundColor: Colors.white,
+        tooltip: S.t('create'),
+        onPressed: () => unawaited(_showCreateMenu()),
+        child: const Icon(Icons.add, size: 30),
+      ),
     );
   }
 

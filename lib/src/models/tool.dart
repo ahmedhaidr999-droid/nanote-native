@@ -1,9 +1,10 @@
-/// The 13 tools of the editor.
+/// The tools of the editor.
+///
+/// v2.1: the four writing pens (fountain / ballpoint / brush / fineliner)
+/// are grouped into ONE [pen] tool — its KIND is chosen inside the pen
+/// settings panel (user request). The highlighter stays a dedicated tool.
 enum Tool {
-  fountain,
-  ballpoint,
-  brush,
-  fineliner,
+  pen,
   highlighter,
   laser,
   eraser,
@@ -18,10 +19,8 @@ enum Tool {
 extension ToolX on Tool {
   String get key => 'tool.${name}';
 
-  bool get isDrawingPen =>
-      this == Tool.fountain ||
-      this == Tool.ballpoint ||
-      this == Tool.brush ||
-      this == Tool.fineliner ||
-      this == Tool.highlighter;
+  bool get isDrawingPen => this == Tool.pen || this == Tool.highlighter;
+
+  /// Tools that produce ink strokes (pens + laser).
+  bool get producesInk => isDrawingPen || this == Tool.laser;
 }

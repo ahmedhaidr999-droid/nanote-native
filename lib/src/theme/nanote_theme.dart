@@ -1,41 +1,57 @@
 import 'package:flutter/material.dart';
 
-/// Exact v1.9.1 design tokens.
+/// Sky-blue design tokens (v2.1 identity refresh).
+///
+/// The app identity is SKY BLUE with its gradients: a calm, airy blue
+/// (Tailwind sky) for the primary actions, soft sky tints for surfaces,
+/// and a sky→cyan gradient for hero elements (FAB, active states).
 class NanoteTokens {
   // Light
-  static const Color lightBackground = Color(0xFFF7F9FC);
-  static const Color lightForeground = Color(0xFF16233A);
+  static const Color lightBackground = Color(0xFFF5FAFE);
+  static const Color lightForeground = Color(0xFF0B2540);
   static const Color lightCard = Color(0xFFFFFFFF);
-  static const Color lightPrimary = Color(0xFF1E6FF2);
+  static const Color lightPrimary = Color(0xFF0284C7); // sky-600
   static const Color lightPrimaryFg = Color(0xFFFFFFFF);
-  static const Color lightSecondary = Color(0xFFEEF2F8);
-  static const Color lightSecondaryFg = Color(0xFF0A3A8F);
-  static const Color lightMutedFg = Color(0xFF5A6B85);
-  static const Color lightAccent = Color(0xFFE8F0FE);
-  static const Color lightAccentFg = Color(0xFF0A3A8F);
+  static const Color lightSecondary = Color(0xFFE3F2FD); // sky-100
+  static const Color lightSecondaryFg = Color(0xFF075985); // sky-800
+  static const Color lightMutedFg = Color(0xFF5E7A96);
+  static const Color lightAccent = Color(0xFFDDF0FC);
+  static const Color lightAccentFg = Color(0xFF0369A1); // sky-700
   static const Color lightDestructive = Color(0xFFE5484D);
-  static const Color lightBorder = Color(0xFFE2E8F1);
-  static const Color lightSuccess = Color(0xFF22A06B);
-  static const Color lightWarning = Color(0xFFFF9F1C);
+  static const Color lightBorder = Color(0xFFD9E8F5);
+  static const Color lightSuccess = Color(0xFF0FA36B);
+  static const Color lightWarning = Color(0xFFF59E0B);
+
+  // Sky gradient (hero elements): sky-500 → cyan-400.
+  static const List<Color> lightBrandGradient = [
+    Color(0xFF0EA5E9),
+    Color(0xFF22D3EE),
+  ];
 
   // Dark
-  static const Color darkBackground = Color(0xFF0E1622);
-  static const Color darkForeground = Color(0xFFE8EEF7);
-  static const Color darkCard = Color(0xFF16202E);
-  static const Color darkPrimary = Color(0xFF6BA6FF);
-  static const Color darkPrimaryFg = Color(0xFF0A2050);
-  static const Color darkSecondary = Color(0xFF1C2838);
-  static const Color darkSecondaryFg = Color(0xFFC9D6EA);
-  static const Color darkMutedFg = Color(0xFF94A6C0);
-  static const Color darkAccent = Color(0xFF1B2A44);
-  static const Color darkAccentFg = Color(0xFFBAD4FF);
+  static const Color darkBackground = Color(0xFF081827);
+  static const Color darkForeground = Color(0xFFE6F3FC);
+  static const Color darkCard = Color(0xFF0F2136);
+  static const Color darkPrimary = Color(0xFF38BDF8); // sky-400
+  static const Color darkPrimaryFg = Color(0xFF04283C);
+  static const Color darkSecondary = Color(0xFF15304B);
+  static const Color darkSecondaryFg = Color(0xFFBDE4FA);
+  static const Color darkMutedFg = Color(0xFF8FAEC7);
+  static const Color darkAccent = Color(0xFF14344E);
+  static const Color darkAccentFg = Color(0xFF9BD8F8);
   static const Color darkDestructive = Color(0xFFFF6B6B);
-  static const Color darkBorder = Color(0xFF24324A);
+  static const Color darkBorder = Color(0xFF1C3A57);
   static const Color darkSuccess = Color(0xFF3ECF8E);
   static const Color darkWarning = Color(0xFFFFB84D);
+
+  static const List<Color> darkBrandGradient = [
+    Color(0xFF38BDF8),
+    Color(0xFF22D3EE),
+  ];
 }
 
-/// Extra named colors exposed via ThemeExtension (accent, success, warning…).
+/// Extra named colors exposed via ThemeExtension (accent, success, warning,
+/// and the sky brand gradient for hero elements).
 @immutable
 class NanoteColors extends ThemeExtension<NanoteColors> {
   final Color accent;
@@ -45,6 +61,9 @@ class NanoteColors extends ThemeExtension<NanoteColors> {
   final Color success;
   final Color warning;
 
+  /// Sky→cyan gradient used by hero elements (FAB, active tool, headers).
+  final List<Color> brandGradient;
+
   const NanoteColors({
     required this.accent,
     required this.accentFg,
@@ -52,6 +71,7 @@ class NanoteColors extends ThemeExtension<NanoteColors> {
     required this.mutedFg,
     required this.success,
     required this.warning,
+    required this.brandGradient,
   });
 
   @override
@@ -62,6 +82,7 @@ class NanoteColors extends ThemeExtension<NanoteColors> {
     Color? mutedFg,
     Color? success,
     Color? warning,
+    List<Color>? brandGradient,
   }) =>
       NanoteColors(
         accent: accent ?? this.accent,
@@ -70,6 +91,7 @@ class NanoteColors extends ThemeExtension<NanoteColors> {
         mutedFg: mutedFg ?? this.mutedFg,
         success: success ?? this.success,
         warning: warning ?? this.warning,
+        brandGradient: brandGradient ?? this.brandGradient,
       );
 
   @override
@@ -82,6 +104,14 @@ class NanoteColors extends ThemeExtension<NanoteColors> {
       mutedFg: Color.lerp(mutedFg, other.mutedFg, t)!,
       success: Color.lerp(success, other.success, t)!,
       warning: Color.lerp(warning, other.warning, t)!,
+      brandGradient: [
+        for (var i = 0; i < brandGradient.length; i++)
+          Color.lerp(
+            brandGradient[i],
+            i < other.brandGradient.length ? other.brandGradient[i] : null,
+            t,
+          )!,
+      ],
     );
   }
 }
@@ -108,6 +138,7 @@ class NanoteTheme {
         border: NanoteTokens.lightBorder,
         success: NanoteTokens.lightSuccess,
         warning: NanoteTokens.lightWarning,
+        brandGradient: NanoteTokens.lightBrandGradient,
       );
 
   static ThemeData dark() => _theme(
@@ -126,6 +157,7 @@ class NanoteTheme {
         border: NanoteTokens.darkBorder,
         success: NanoteTokens.darkSuccess,
         warning: NanoteTokens.darkWarning,
+        brandGradient: NanoteTokens.darkBrandGradient,
       );
 
   static ThemeData _theme({
@@ -144,6 +176,7 @@ class NanoteTheme {
     required Color border,
     required Color success,
     required Color warning,
+    required List<Color> brandGradient,
   }) {
     final scheme = ColorScheme(
       brightness: brightness,
@@ -177,6 +210,7 @@ class NanoteTheme {
           mutedFg: mutedFg,
           success: success,
           warning: warning,
+          brandGradient: brandGradient,
         ),
       ],
       appBarTheme: AppBarTheme(
@@ -224,7 +258,9 @@ class NanoteTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: secondary,
+        fillColor: brightness == Brightness.light
+            ? const Color(0xFFEAF5FE)
+            : secondary,
         border: OutlineInputBorder(
           borderRadius: radius,
           borderSide: BorderSide(color: border),

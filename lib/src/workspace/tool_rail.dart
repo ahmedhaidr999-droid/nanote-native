@@ -10,8 +10,13 @@ import 'ruler_overlay.dart';
 
 /// Vertical tool rail (width 56) of the editor.
 ///
-/// * 13 tool buttons — the ACTIVE tool is highlighted with the accent
-///   background + primary color.
+/// v2.1: the four writing pens are grouped into ONE pen button (the kind is
+/// chosen in the pen settings panel). 10 tools total:
+/// pen · highlighter · laser · eraser · lasso · text · shape · image ·
+/// sticker · pan.
+///
+/// * The ACTIVE tool is highlighted with the sky accent background +
+///   primary color; the pen button shows the selected pen KIND icon.
 /// * Undo / redo (disabled states driven by the engine's history).
 /// * Ruler toggle (active state).
 /// * Current color dot (tap → [onColorTap], opens the color popover).
@@ -43,10 +48,7 @@ class ToolRail extends StatelessWidget {
   final bool hidden;
 
   static const Map<Tool, IconData> _toolIcons = {
-    Tool.fountain: Icons.edit,
-    Tool.ballpoint: Icons.draw,
-    Tool.brush: Icons.brush,
-    Tool.fineliner: Icons.edit_note,
+    Tool.pen: Icons.edit,
     Tool.highlighter: Icons.highlight,
     Tool.laser: Icons.flashlight_on,
     Tool.eraser: Icons.auto_fix_normal,
@@ -56,6 +58,14 @@ class ToolRail extends StatelessWidget {
     Tool.image: Icons.image,
     Tool.sticker: Icons.emoji_emotions,
     Tool.pan: Icons.pan_tool,
+  };
+
+  /// The pen button reflects the selected pen KIND.
+  static const Map<PenKind, IconData> _penKindIcons = {
+    PenKind.fountain: Icons.edit,
+    PenKind.ballpoint: Icons.draw,
+    PenKind.brush: Icons.brush,
+    PenKind.fineliner: Icons.edit_note,
   };
 
   @override
@@ -146,15 +156,30 @@ class ToolRail extends StatelessWidget {
     NanoteColors colors,
   ) {
     final active = tools.tool == t;
+    final icon = t == Tool.pen ? _penKindIcons[tools.penKind]! : _toolIcons[t]!;
     return Container(
+      margin: const EdgeInsets.symmetric(vertical: 1),
       decoration: BoxDecoration(
+        // Lively accent: a soft sky gradient wash behind the active tool.
+        gradient: active
+            ? LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  colors.accent,
+                  Color.lerp(colors.accent, scheme.primary, 0.18)!,
+                ],
+              )
+            : null,
         color: active ? colors.accent : null,
         borderRadius: BorderRadius.circular(NANOTE_RADIUS),
       ),
       child: IconButton(
-        icon: Icon(_toolIcons[t], size: 22),
+        icon: Icon(icon, size: 22),
         color: active ? scheme.primary : colors.mutedFg,
-        tooltip: S.t(t.key),
+        tooltip: t == Tool.pen
+            ? '${S.t('tool.pen')} · ${S.t(tools.penKind.key)}'
+            : S.t(t.key),
         // Tap inactive tool → select + open its settings panel.
         // Tap the ACTIVE tool again → toggle the panel closed/open.
         onPressed: () => tools.railTap(t),
@@ -162,28 +187,13 @@ class ToolRail extends StatelessWidget {
     );
   }
 
-  static StrokeKind? _penKind(Tool t) {
-    switch (t) {
-      case Tool.fountain:
-        return StrokeKind.fountain;
-      case Tool.ballpoint:
-        return StrokeKind.ballpoint;
-      case Tool.brush:
-        return StrokeKind.brush;
-      case Tool.fineliner:
-        return StrokeKind.fineliner;
-      case Tool.highlighter:
-        return StrokeKind.highlighter;
-      default:
-        return null;
-    }
-  }
-
   /// The color swatch shows the color the ACTIVE tool would draw with.
   int _activeColor() {
-    final kind = _penKind(tools.tool);
-    if (kind != null) return tools.pen(kind).color;
     switch (tools.tool) {
+      case Tool.pen:
+        return tools.pen(tools.penKind.strokeKind).color;
+      case Tool.highlighter:
+        return tools.pen(StrokeKind.highlighter).color;
       case Tool.laser:
         return tools.laser.color;
       case Tool.text:
@@ -191,7 +201,7 @@ class ToolRail extends StatelessWidget {
       case Tool.shape:
         return tools.shapeStrokeColor;
       default:
-        return tools.pen(StrokeKind.fountain).color;
+        return tools.pen(tools.penKind.strokeKind).color;
     }
   }
 }

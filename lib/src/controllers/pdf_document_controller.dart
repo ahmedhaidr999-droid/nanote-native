@@ -7,16 +7,33 @@ import 'package:flutter/widgets.dart';
 import 'package:pdfx/pdfx.dart';
 
 import '../persistence/file_store.dart';
+import '../workspace/pdf_page_tile.dart' show PdfPageBitmap;
 
 /// Background PDF renderer for imported notebooks.
 ///
+/// v2.1 pipeline hardening (fixes: PDF pages 2+ never rendering while
+/// continuous-scrolling, and pages turning gray while writing/erasing):
+///
+///  * WHITE paper placeholder — a page whose render is still missing looks
+///    like white paper, never a gray block.
+///  * Size-resolution NEVER caches failures: a page whose `getPage` failed
+///    once is retried on the next query (previously one transient pdfx error
+///    made that page unrenderable forever — the classic "only page 1 shows").
+///  * Render retries with backoff — transient pdfium/PNG-pipeline errors
+///    re-enqueue after a short delay instead of giving up.
+///  * PRIORITY queue — renders for pages that are on screen RIGHT NOW jump
+///    ahead of prefetch/background work, so the visible page paints first.
+///  * Ref-counted images — a tile that holds a rendered image RETAINS it;
+///    the LRU may evict it logically, but the pixels are only disposed once
+///    no tile uses them (painting a disposed ui.Image crashes the raster
+///    thread → page suddenly gray/blank).
+///  * JPEG pipeline — much faster than PNG for full-page rasterization.
+///
 ///  * 1-BASED page numbers everywhere (pdfx convention).
-///  * Quality buckets `[1.0, 1.5, 2.0, 3.0, 4.0] × dpr`; the smallest bucket
-///    ≥ the requested scale hint wins (else the largest), max render width
-///    2200px with the height scaled proportionally.
-///  * LRU cache of 18 decoded [ui.Image]s keyed by `'pageNumber@widthPx'`.
-///  * SERIALIZED render queue — pdfx on Android cannot render two pages at
-///    once, and every [PdfPage] is closed right after its render.
+///  * Quality buckets `[1.0, 1.5, 2.0, 3.0] × dpr`; max render width 1600px.
+///  * LRU cache of 12 decoded [ui.Image]s keyed by `'pageNumber@widthPx'`.
+///  * SERIALIZED pdfx access — pdfx/Android cannot handle parallel page
+///    operations; every render + doc open/close runs through one queue.
 ///  * Every render is token-guarded: results produced against a document
 ///    that has since been closed/replaced are dropped (and disposed).
 class PdfDocumentController extends ChangeNotifier {
@@ -24,23 +41,39 @@ class PdfDocumentController extends ChangeNotifier {
 
   static final PdfDocumentController I = PdfDocumentController._();
 
-  static const List<double> _buckets = [1.0, 1.5, 2.0, 3.0, 4.0];
-  static const int _maxCacheEntries = 18;
-  static const int _maxRenderWidthPx = 2200;
+  static const List<double> _buckets = [1.0, 1.5, 2.0, 3.0];
+  static const int _maxCacheEntries = 12;
+  static const int _maxRenderWidthPx = 1600;
 
   PdfDocument? _doc;
   int _token = 0;
 
-  /// Serialized work queue (renders + doc open/close) — never two pdfx
-  /// operations in flight at once.
-  Future<void> _queue = Future<void>.value();
+  /// Serialized pdfx work (renders + doc open/close) — never two pdfx
+  /// operations in flight at once. Two lanes: priority (visible page)
+  /// renders are picked before background work.
+  final List<_QueueTask> _pending = [];
+  _QueueTask? _running;
 
   final LinkedHashMap<String, ui.Image> _cache = LinkedHashMap();
+
+  /// In-flight render futures by cache key (dedupes concurrent requests).
   final Map<String, Future<ui.Image?>> _inFlight = {};
+
+  /// Failed renders by key → when the failure was recorded (for retry).
+  final Map<String, DateTime> _failedAt = {};
+  static const Duration _retryDelay = Duration(milliseconds: 650);
+
+  /// In-flight size resolutions by page number.
   final Map<int, Future<Size?>> _sizeFutures = {};
 
   /// Page sizes in pdf points (pdfx page.width/height), filled lazily.
+  /// Pages whose resolution FAILED are not cached, so they are retried.
   final Map<int, Size> _pageSizes = {};
+
+  /// Ref-counted live images: cache key → (image, retained count).
+  /// The LRU removes the entry, but the image is only disposed when its
+  /// ref-count reaches 0 (tiles retain what they paint).
+  final Map<String, _LiveImage> _live = {};
 
   // ------------------------------------------------------------------ state
 
@@ -55,13 +88,41 @@ class PdfDocumentController extends ChangeNotifier {
   /// Page count of the open document (0 when closed).
   int get pageCount => _doc?.pagesCount ?? 0;
 
+  // ------------------------------------------------------------------ queue
+
+  void _enqueueTask(_QueueTask task) {
+    _pending.add(task);
+    _drain();
+  }
+
+  void _drain() {
+    if (_running != null) return;
+    // Priority tasks first (FIFO within each lane).
+    _QueueTask? next;
+    for (var i = 0; i < _pending.length; i++) {
+      if (_pending[i].priority) {
+        next = _pending.removeAt(i);
+        break;
+      }
+    }
+    next ??= _pending.isEmpty ? null : _pending.removeAt(0);
+    if (next == null) return;
+    _running = next;
+    next.run().whenComplete(() {
+      _running = null;
+      // Continue after the current frame so microtask chains can't starve
+      // the platform channel.
+      scheduleMicrotask(_drain);
+    });
+  }
+
   // ------------------------------------------------------------------ open
 
   /// Opens the PDF at [absPath], closing any previous document first.
   /// Returns false when the file cannot be opened.
   Future<bool> open(String absPath) async {
     final token = ++_token;
-    final ok = await _enqueue<bool>(() async {
+    final ok = await _runQueued<bool>(priority: true, () async {
       final old = _doc;
       _doc = null;
       currentPath = null;
@@ -106,7 +167,7 @@ class PdfDocumentController extends ChangeNotifier {
   /// Closes the document and drops every cached image/page size.
   Future<void> close() async {
     _token++;
-    await _enqueue<void>(() async {
+    await _runQueued<void>(priority: true, () async {
       final old = _doc;
       _doc = null;
       currentPath = null;
@@ -122,14 +183,11 @@ class PdfDocumentController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Maps a 0-based doc page index to the 1-based page number used by pdfx.
-  int pageForDocPage(int docPageIndex) => docPageIndex + 1;
-
   // -------------------------------------------------------------- page size
 
   /// Page size in pdf points (pdfx page.width/height at 72dpi). Returns the
   /// cached value, or null when it is not known yet — an async fill is kicked
-  /// off in that case, so re-query after the next [renderTick] bump.
+  /// off in that case (failures are NOT cached: the next call retries).
   Size? pageSize(int pageNumber) {
     final doc = _doc;
     if (doc == null) return null;
@@ -141,11 +199,14 @@ class PdfDocumentController extends ChangeNotifier {
   }
 
   /// Queues a tiny task that opens the page, records its size and closes it.
+  /// Resolves to null on failure — and the page is left un-cached so a later
+  /// call retries it (this is the "page 2 never appears" fix). PRIORITY:
+  /// size tasks are cheap and unblock the waiting renders.
   Future<Size?> _resolvePageSize(
       PdfDocument doc, int token, int pageNumber) {
     final existing = _sizeFutures[pageNumber];
     if (existing != null) return existing;
-    final fut = _enqueue<Size?>(() async {
+    final fut = _runQueued<Size?>(() async {
       if (token != _token || _doc != doc) return null;
       PdfPage? page;
       try {
@@ -161,7 +222,7 @@ class PdfDocumentController extends ChangeNotifier {
         } catch (_) {}
         return null;
       }
-    });
+    }, priority: true);
     _sizeFutures[pageNumber] = fut;
     unawaited(fut.whenComplete(() => _sizeFutures.remove(pageNumber)));
     return fut;
@@ -171,9 +232,14 @@ class PdfDocumentController extends ChangeNotifier {
 
   /// Renders page [pageNumber] (1-based) at the best quality bucket for
   /// [scaleHint] (screen scale × device pixel ratio). Returns the decoded
-  /// image from the LRU cache, scheduling a render on a miss. Null when the
-  /// document is closed, the page is out of range, or the render failed.
-  Future<ui.Image?> pageImage(int pageNumber, double scaleHint) async {
+  /// image (with its cache key — tiles retain/release it) from the LRU
+  /// cache, scheduling a render on a miss. Null when the document is
+  /// closed, the page is out of range, or the render failed.
+  ///
+  /// [priority] — the page is visible on screen right now: its render jumps
+  /// the queue and a recent transient failure is retried immediately.
+  Future<PdfPageBitmap?> pageImage(int pageNumber, double scaleHint,
+      {bool priority = false}) async {
     final doc = _doc;
     final token = _token;
     if (doc == null) return null;
@@ -181,8 +247,7 @@ class PdfDocumentController extends ChangeNotifier {
 
     var size = _pageSizes[pageNumber];
     size ??= await _resolvePageSize(doc, token, pageNumber);
-    if (size == null) return null;
-    if (size.width <= 0 || size.height <= 0) return null;
+    if (size == null || size.width <= 0 || size.height <= 0) return null;
     if (token != _token || _doc != doc) return null;
 
     final scale = _bucketFor(scaleHint);
@@ -192,23 +257,60 @@ class PdfDocumentController extends ChangeNotifier {
     final key = '$pageNumber@$wPx';
 
     final hit = _cacheHit(key);
-    if (hit != null) return hit;
+    if (hit != null) return PdfPageBitmap(hit, key);
+
+    // A recent failure for this key: retry only after the backoff (or
+    // immediately when the page is on screen).
+    final fail = _failedAt[key];
+    if (fail != null) {
+      final since = DateTime.now().difference(fail);
+      if (since < _retryDelay && !priority) return null;
+      _failedAt.remove(key);
+    }
 
     final pending = _inFlight[key];
-    if (pending != null) return pending;
+    if (pending != null) {
+      final img = await pending;
+      return img == null ? null : PdfPageBitmap(img, key);
+    }
 
     final hPx = (wPx * size.height / size.width).round();
-    final fut = _enqueue<ui.Image?>(
-        () => _render(doc, token, pageNumber, wPx, hPx));
+    final fut = _runQueued<ui.Image?>(
+      priority: priority,
+      () => _render(doc, token, pageNumber, wPx, hPx),
+    );
     _inFlight[key] = fut;
     unawaited(fut.whenComplete(() => _inFlight.remove(key)));
-    return fut;
+    final img = await fut;
+    return img == null ? null : PdfPageBitmap(img, key);
   }
 
   /// External re-render request (e.g. after a viewport change): bumps
   /// [renderTick] so tiles repaint and re-request their bucket.
   void bump() {
     renderTick.value = renderTick.value + 1;
+  }
+
+  // ------------------------------------------------------------ ref-counting
+
+  /// Marks the image under [key] as in use by a tile. While retained the
+  /// pixels are never disposed, even if the LRU evicts the entry.
+  void retain(String key) {
+    final live = _live[key];
+    if (live != null) live.refs++;
+  }
+
+  /// Drops one reference; disposes the pixels when the image was evicted
+  /// from the LRU and this was the last reference. Clamped at zero so a
+  /// rare double-release can never drive a count negative.
+  void release(String key) {
+    final live = _live[key];
+    if (live == null) return;
+    if (live.refs > 0) live.refs--;
+    if (live.refs <= 0 && live.evicted) {
+      _live.remove(key);
+      _disposeImage(live.image);
+    }
   }
 
   // ---------------------------------------------------------------- helpers
@@ -241,14 +343,19 @@ class PdfDocumentController extends ChangeNotifier {
       final img = await page.render(
         width: wPx.toDouble(),
         height: hPx.toDouble(),
-        format: PdfPageImageFormat.png,
+        // JPEG is dramatically faster than PNG for full-page rasters and we
+        // always render on an opaque white background anyway.
+        format: PdfPageImageFormat.jpeg,
         backgroundColor: '#FFFFFF',
-        quality: 95,
+        quality: 90,
       );
       await page.close();
       page = null;
       if (token != _token || _doc != doc) return null;
-      if (img == null || img.bytes.isEmpty) return null;
+      if (img == null || img.bytes.isEmpty) {
+        _scheduleRetry('$pageNumber@$wPx');
+        return null;
+      }
       final image = await _decode(img.bytes);
       if (token != _token || _doc != doc) {
         image.dispose();
@@ -262,9 +369,26 @@ class PdfDocumentController extends ChangeNotifier {
       try {
         await page?.close();
       } catch (_) {}
+      _scheduleRetry('$pageNumber@$wPx');
       return null;
     }
   }
+
+  /// Records a failed render and bumps [renderTick] after the backoff so
+  /// mounted tiles re-request (bounded to a few retries per key).
+  void _scheduleRetry(String key) {
+    _failedAt.putIfAbsent(key, () => DateTime.now());
+    final tries = (_retryCounts[key] ?? 0) + 1;
+    _retryCounts[key] = tries;
+    if (tries > 4) return; // give up — likely a broken page/document
+    Future<void>.delayed(_retryDelay, () {
+      if (_failedAt.containsKey(key)) {
+        renderTick.value = renderTick.value + 1;
+      }
+    });
+  }
+
+  final Map<String, int> _retryCounts = {};
 
   Future<ui.Image> _decode(Uint8List bytes) async {
     final codec = await ui.instantiateImageCodec(bytes);
@@ -276,16 +400,36 @@ class PdfDocumentController extends ChangeNotifier {
     }
   }
 
-  /// LRU insert (access-order eviction, max 18 entries).
+  /// LRU insert (access-order eviction, max 12 entries). Evicted entries
+  /// keep their pixels alive while any tile retains them.
   void _store(String key, ui.Image image) {
-    final existing = _cache.remove(key);
-    if (existing != null) _disposeImage(existing);
+    final existing = _live.remove(key);
+    if (existing != null) {
+      // Same key re-rendered: replace the pixels. Old pixels are disposed
+      // once unreferenced (or immediately when nobody holds them).
+      if (existing.refs <= 0) {
+        _disposeImage(existing.image);
+      } else {
+        existing.evicted = true; // dispose when the last ref drops
+      }
+    }
+    _live[key] = _LiveImage(image);
+    _cache.remove(key);
     _cache[key] = image;
     while (_cache.length > _maxCacheEntries) {
       final oldestKey = _cache.keys.first;
-      final oldest = _cache.remove(oldestKey);
-      if (oldest != null) _disposeImage(oldest);
+      _cache.remove(oldestKey);
+      final live = _live[oldestKey];
+      if (live != null) {
+        live.evicted = true;
+        if (live.refs <= 0) {
+          _live.remove(oldestKey);
+          _disposeImage(live.image);
+        }
+      }
     }
+    _failedAt.remove(key);
+    _retryCounts.remove(key);
   }
 
   /// LRU read: re-inserts the entry so it becomes most recently used.
@@ -297,13 +441,18 @@ class PdfDocumentController extends ChangeNotifier {
   }
 
   void _clearCaches() {
-    for (final img in _cache.values) {
-      _disposeImage(img);
+    for (final live in _live.values) {
+      if (!live.evicted) _disposeImage(live.image);
     }
+    _live.clear();
     _cache.clear();
     _pageSizes.clear();
     _inFlight.clear();
     _sizeFutures.clear();
+    _failedAt.clear();
+    _retryCounts.clear();
+    // Queued tasks are NOT dropped: stale ones are token-guarded no-ops and
+    // their callers await their futures (dropping them would hang open()).
   }
 
   /// Disposal is deferred by a grace window: tiles keep painting the last
@@ -315,12 +464,41 @@ class PdfDocumentController extends ChangeNotifier {
 
   static const Duration _disposeGrace = Duration(seconds: 5);
 
-  /// Chains [task] onto the serialized queue. The queue tail swallows errors
-  /// so one failed render can never stall the chain; the returned future
-  /// carries the task's own result/error.
-  Future<T> _enqueue<T>(Future<T> Function() task) {
-    final fut = _queue.then((_) => task());
-    _queue = fut.then((_) {}, onError: (_) {});
-    return fut;
+  /// Runs [task] on the serialized queue with the given priority. The
+  /// queue tail never stalls on a failed task; the returned future carries
+  /// the task's own result/error.
+  Future<T> _runQueued<T>(Future<T> Function() task, {bool priority = false}) {
+    final t = _QueueTask<T>(task, priority: priority);
+    _enqueueTask(t);
+    return t.future;
   }
+}
+
+class _QueueTask<T> {
+  _QueueTask(this._task, {this.priority = false});
+
+  final Future<T> Function() _task;
+  final bool priority;
+  final Completer<T> _completer = Completer<T>();
+
+  Future<T> get future => _completer.future;
+
+  /// Executes the task NOW (the queue calls this when it is this task's
+  /// turn) and completes the shared future. Never throws.
+  Future<void> run() async {
+    try {
+      final result = await _task();
+      if (!_completer.isCompleted) _completer.complete(result);
+    } catch (e, s) {
+      if (!_completer.isCompleted) _completer.completeError(e, s);
+    }
+  }
+}
+
+class _LiveImage {
+  _LiveImage(this.image);
+
+  final ui.Image image;
+  int refs = 0;
+  bool evicted = false;
 }

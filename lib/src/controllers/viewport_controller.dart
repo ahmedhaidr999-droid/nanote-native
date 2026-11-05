@@ -21,7 +21,8 @@ class ViewportController extends ChangeNotifier {
   double _scale = 1.0;
   Offset _pan = Offset.zero;
 
-  static const double minScale = 0.3;
+  /// Zoom-out limit: 50% (user-requested — never shrink the page further).
+  static const double minScale = 0.5;
   static const double maxScale = 8.0;
 
   /// How far past the doc edges a pan may overshoot before clamping

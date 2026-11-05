@@ -135,6 +135,7 @@ class S {
     'rootFolder': 'Library',
     'importingPdf': 'Importing PDF…',
     'pdfImported': 'PDF imported',
+    'folderCreated': 'Folder created',
 
     // templates
     'template.blank': 'Blank',
@@ -157,6 +158,7 @@ class S {
     'size.letterLandscape': 'Letter Landscape',
 
     // tools
+    'tool.pen': 'Pen',
     'tool.fountain': 'Fountain pen',
     'tool.ballpoint': 'Ballpoint',
     'tool.brush': 'Brush',
@@ -300,7 +302,14 @@ class S {
     'addPage': 'Add page',
     'duplicatePage': 'Duplicate page',
     'deletePage': 'Delete page',
+    'deletePages': 'Delete pages',
     'confirmDeletePage': 'Delete this page and its ink?',
+    'confirmDeletePages': 'Delete {n} page(s) and their ink?',
+    'cantDeleteAllPages': 'A notebook must keep at least one page',
+    'selectAll': 'Select all',
+    'penType': 'Pen type',
+    'addFavorite': 'Add to favorites',
+    'removeFavorite': 'Remove from favorites',
     'bookmark': 'Bookmark',
     'pageTitle': 'Page title',
     'untitledPage': 'Untitled',
@@ -517,6 +526,7 @@ class S {
     'rootFolder': 'المكتبة',
     'importingPdf': 'جارٍ استيراد PDF…',
     'pdfImported': 'تم استيراد PDF',
+    'folderCreated': 'تم إنشاء المجلد',
 
     // templates
     'template.blank': 'فارغ',
@@ -539,6 +549,7 @@ class S {
     'size.letterLandscape': 'Letter عرضي',
 
     // tools
+    'tool.pen': 'قلم',
     'tool.fountain': 'قلم حبر',
     'tool.ballpoint': 'قلم جاف',
     'tool.brush': 'فرشاة',
@@ -683,7 +694,14 @@ class S {
     'addPage': 'إضافة صفحة',
     'duplicatePage': 'تكرار الصفحة',
     'deletePage': 'حذف الصفحة',
+    'deletePages': 'حذف الصفحات',
     'confirmDeletePage': 'حذف هذه الصفحة وحبرها؟',
+    'confirmDeletePages': 'حذف {n} من الصفحات وحبرها؟',
+    'cantDeleteAllPages': 'يجب أن تبقى صفحة واحدة على الأقل',
+    'selectAll': 'تحديد الكل',
+    'penType': 'نوع القلم',
+    'addFavorite': 'إضافة إلى المفضلة',
+    'removeFavorite': 'إزالة من المفضلة',
     'bookmark': 'علامة مرجعية',
     'pageTitle': 'عنوان الصفحة',
     'untitledPage': 'بدون عنوان',

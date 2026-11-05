@@ -22,7 +22,25 @@ class PenState {
       PenState(color: color ?? this.color, size: size ?? this.size);
 }
 
-/// App-wide tool state: current tool, per-pen color/width memory, palettes,
+/// The kinds available inside the grouped pen tool.
+enum PenKind { fountain, ballpoint, brush, fineliner }
+
+extension PenKindX on PenKind {
+  String get key => 'tool.$name';
+
+  StrokeKind get strokeKind => switch (this) {
+        PenKind.fountain => StrokeKind.fountain,
+        PenKind.ballpoint => StrokeKind.ballpoint,
+        PenKind.brush => StrokeKind.brush,
+        PenKind.fineliner => StrokeKind.fineliner,
+      };
+}
+
+/// Tool-group scoping for palettes/favorites (pens / highlighter / laser).
+enum ColorScope { pen, highlighter, laser }
+
+/// App-wide tool state: current tool, the selected pen KIND (the four pens
+/// are grouped into one tool), per-pen color/width memory, palettes,
 /// eraser / shape / laser / text defaults. Singleton: [ToolController.I].
 class ToolController extends ChangeNotifier {
   ToolController._() {
@@ -35,12 +53,24 @@ class ToolController extends ChangeNotifier {
 
   // ------------------------------------------------------------------ tool
 
-  Tool _tool = Tool.fountain;
+  Tool _tool = Tool.pen;
 
   /// Per-tool settings panel visibility (the tool rail toggles it: tap an
   /// inactive tool → select + OPEN its settings; tap the ACTIVE tool again →
   /// close the panel).
   bool settingsOpen = false;
+
+  /// The kind of pen the grouped pen tool currently uses.
+  PenKind _penKind = PenKind.fountain;
+
+  PenKind get penKind => _penKind;
+
+  set penKind(PenKind k) {
+    if (_penKind == k) return;
+    _penKind = k;
+    notifyListeners();
+    save();
+  }
 
   /// Current tool (setter notifies listeners).
   Tool get tool => _tool;
@@ -91,7 +121,7 @@ class ToolController extends ChangeNotifier {
   static int _defaultColorFor(StrokeKind kind) {
     switch (kind) {
       case StrokeKind.ballpoint:
-        return 0xFF1E6FF2;
+        return 0xFF0284C7;
       case StrokeKind.highlighter:
         return 0xFFFFD84D;
       case StrokeKind.fountain:
@@ -104,11 +134,44 @@ class ToolController extends ChangeNotifier {
   /// Per-pen state accessor (never null; falls back to fountain).
   PenState pen(StrokeKind kind) => pens[kind] ?? pens[StrokeKind.fountain]!;
 
-  /// Favorite colors (ARGB ints, max 5).
-  List<int> favoriteColors = [];
+  // ------------------------------------------------------- palette memory
+
+  /// Favorites PER tool group (pens / highlighter / laser), max 8 each.
+  List<int> penFavorites = [];
+  List<int> highlighterFavorites = [];
+  List<int> laserFavorites = [];
 
   /// Recently used colors, most recent first (max 8).
   List<int> recentColors = [];
+
+  /// The favorites list of the given scope.
+  List<int> favoritesOf(ColorScope scope) => switch (scope) {
+        ColorScope.pen => penFavorites,
+        ColorScope.highlighter => highlighterFavorites,
+        ColorScope.laser => laserFavorites,
+      };
+
+  /// The color scope the CURRENT tool edits.
+  ColorScope get colorScope => switch (_tool) {
+        Tool.highlighter => ColorScope.highlighter,
+        Tool.laser => ColorScope.laser,
+        _ => ColorScope.pen,
+      };
+
+  /// Toggles [color] in the scope's favorites (max 8; oldest evicted first).
+  void toggleFavoriteColor(int color, {ColorScope? scope}) {
+    final list = favoritesOf(scope ?? colorScope);
+    if (list.contains(color)) {
+      list.remove(color);
+    } else {
+      list.add(color);
+      if (list.length > 8) {
+        list.removeRange(0, list.length - 8);
+      }
+    }
+    notifyListeners();
+    save();
+  }
 
   // ---------------------------------------------------------------- eraser
 
@@ -269,14 +332,8 @@ class ToolController extends ChangeNotifier {
   /// fountain pen (only pen tools actually begin strokes).
   StrokeKind _kindForTool(Tool t) {
     switch (t) {
-      case Tool.fountain:
-        return StrokeKind.fountain;
-      case Tool.ballpoint:
-        return StrokeKind.ballpoint;
-      case Tool.brush:
-        return StrokeKind.brush;
-      case Tool.fineliner:
-        return StrokeKind.fineliner;
+      case Tool.pen:
+        return _penKind.strokeKind;
       case Tool.highlighter:
         return StrokeKind.highlighter;
       case Tool.laser:
@@ -376,21 +433,6 @@ class ToolController extends ChangeNotifier {
     save();
   }
 
-  /// Toggles [color] in the favorites (max 5; the oldest favorite is evicted
-  /// first).
-  void toggleFavoriteColor(int color) {
-    if (favoriteColors.contains(color)) {
-      favoriteColors.remove(color);
-    } else {
-      favoriteColors.add(color);
-      if (favoriteColors.length > 5) {
-        favoriteColors.removeRange(0, favoriteColors.length - 5);
-      }
-    }
-    notifyListeners();
-    save();
-  }
-
   // ------------------------------------------------------------- persistence
 
   bool _loaded = false;
@@ -421,19 +463,32 @@ class ToolController extends ChangeNotifier {
           }
         }
       }
-      favoriteColors = List<int>.of(s.favoriteColors);
-      if (favoriteColors.length > 5) {
-        favoriteColors = favoriteColors.sublist(0, 5);
+      _penKind = PenKind.values.firstWhere(
+        (k) => k.name == s.penKind,
+        orElse: () => PenKind.fountain,
+      );
+      penFavorites = _readColors(s.penFavorites);
+      highlighterFavorites = _readColors(s.highlighterFavorites);
+      laserFavorites = _readColors(s.laserFavorites);
+      // Legacy migration: the old shared favorites become pen favorites.
+      if (penFavorites.isEmpty) {
+        penFavorites = _readColors(s.favoriteColors);
+        if (penFavorites.isNotEmpty) {
+          s.penFavorites = List<int>.of(penFavorites);
+        }
       }
-      recentColors = List<int>.of(s.recentColors);
-      if (recentColors.length > 8) {
-        recentColors = recentColors.sublist(0, 8);
-      }
+      recentColors = _readColors(s.recentColors);
     } catch (_) {
       // Corrupt entries — keep defaults for whatever failed to parse.
     }
     _loaded = true;
     notifyListeners();
+  }
+
+  static List<int> _readColors(List<int> src) {
+    final out = List<int>.of(src);
+    if (out.length > 8) out.removeRange(8, out.length);
+    return out;
   }
 
   /// Persists pen states + palettes. No-op before the first [load] completed
@@ -445,7 +500,10 @@ class ToolController extends ChangeNotifier {
       for (final e in pens.entries)
         e.key.name: {'c': e.value.color, 's': e.value.size},
     };
-    s.favoriteColors = List<int>.of(favoriteColors);
+    s.penKind = _penKind.name;
+    s.penFavorites = List<int>.of(penFavorites);
+    s.highlighterFavorites = List<int>.of(highlighterFavorites);
+    s.laserFavorites = List<int>.of(laserFavorites);
     s.recentColors = List<int>.of(recentColors);
     await SettingsController.I.saveRaw();
   }

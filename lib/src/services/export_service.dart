@@ -34,12 +34,21 @@ class ExportService {
 
   /// Renders every page at 2x and shares a one-sheet-per-page PDF.
   static Future<void> shareNotebookPdf(StrokeEngine engine) async {
-    await engine.ensureAllLoaded();
-    if (engine.pages.isEmpty) return;
+    await sharePagesPdf(engine, engine.pages);
+  }
+
+  /// Renders the given pages at 2x and shares a one-sheet-per-page PDF
+  /// (used by the pages manager for SELECTED pages).
+  static Future<void> sharePagesPdf(
+      StrokeEngine engine, List<PageMeta> pages) async {
+    if (pages.isEmpty) return;
+    for (final p in pages) {
+      await engine.ensureLoaded(p.id);
+    }
     final pdf = pw.Document();
     final rendered = <ui.Image>[];
     try {
-      for (final meta in engine.pages) {
+      for (final meta in pages) {
         final size = meta.effectiveSize;
         final image = await _rasterPage(engine, meta, 2.0);
         rendered.add(image);
@@ -58,7 +67,7 @@ class ExportService {
       final bytes = await pdf.save();
       final file = File(p.join(
         Directory.systemTemp.path,
-        'nanote_${engine.notebook?.id ?? 'notebook'}.pdf',
+        'nanote_${engine.notebook?.id ?? 'notebook'}_pages.pdf',
       ));
       await file.writeAsBytes(bytes);
       await Share.shareXFiles([XFile(file.path)], text: S.t('exportPdf'));
@@ -175,7 +184,8 @@ class ExportService {
       }
       final index = engine.pages.indexOf(page);
       if (index < 0 || index + 1 > ctrl.pageCount) return null;
-      return await ctrl.pageImage(index + 1, 2.0);
+      final bmp = await ctrl.pageImage(index + 1, 2.0);
+      return bmp?.image;
     } catch (_) {
       return null;
     }

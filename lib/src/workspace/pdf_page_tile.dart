@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -5,13 +6,28 @@ import 'package:flutter/material.dart';
 import '../controllers/pdf_document_controller.dart';
 import '../controllers/viewport_controller.dart';
 
+/// A rendered PDF page: the decoded image + its cache key (the tile
+/// retains/releases the key so the controller never disposes pixels a
+/// visible tile is still painting).
+class PdfPageBitmap {
+  const PdfPageBitmap(this.image, this.key);
+
+  final ui.Image image;
+  final String key;
+}
+
 /// One PDF background page. Positioned per page by the workspace (inside the
 /// doc transform); paints the rendered [ui.Image] fitted into [pageSize].
 ///
-/// Renders nothing while the document is closed. Re-requests a render at the
-/// current quality bucket whenever it becomes visible
-/// (didChangeDependencies) and whenever [PdfDocumentController.renderTick] or
-/// [ViewportController.renderTick] fire (new images ready / zoom settled).
+/// v2.1 hardening:
+///  * WHITE paper placeholder while a render is pending/missing — the page
+///    always looks like paper, never a gray block.
+///  * Retains its current image in the controller (ref-counted) — the LRU
+///    can evict logically, but pixels in use are never disposed (painting a
+///    disposed image kills the rasterizer → page went gray/blank).
+///  * Retry timer: a render that came back null retries a few times with a
+///    short backoff (the controller retries transient pdfx failures too).
+///  * Priority requests: the tile is on screen, its render jumps the queue.
 class PdfPageTile extends StatefulWidget {
   const PdfPageTile({
     super.key,
@@ -41,8 +57,11 @@ class PdfPageTile extends StatefulWidget {
 
 class _PdfPageTileState extends State<PdfPageTile> {
   ui.Image? _image;
+  String? _retainedKey;
   double _requestedScale = 0;
   bool _pending = false;
+  Timer? _retryTimer;
+  int _retries = 0;
 
   @override
   void initState() {
@@ -63,6 +82,7 @@ class _PdfPageTileState extends State<PdfPageTile> {
     if (oldWidget.pdf != widget.pdf) {
       oldWidget.pdf.renderTick.removeListener(_onTick);
       widget.pdf.renderTick.addListener(_onTick);
+      _dropRetained();
       _image = null;
       _requestedScale = 0;
     }
@@ -79,6 +99,14 @@ class _PdfPageTileState extends State<PdfPageTile> {
 
   void _onTick() => _request();
 
+  void _dropRetained() {
+    final key = _retainedKey;
+    if (key != null) {
+      widget.pdf.release(key);
+      _retainedKey = null;
+    }
+  }
+
   Future<void> _request() async {
     if (!mounted || !widget.pdf.isOpen || _pending) return;
     final dpr = MediaQuery.maybeOf(context)?.devicePixelRatio ?? 2.0;
@@ -90,11 +118,31 @@ class _PdfPageTileState extends State<PdfPageTile> {
 
     _pending = true;
     _requestedScale = hint;
+    _retryTimer?.cancel();
     try {
-      final img = await widget.pdf.pageImage(widget.pageNumber, hint);
+      final bmp =
+          await widget.pdf.pageImage(widget.pageNumber, hint, priority: true);
       // Guard setState after dispose.
-      if (!mounted || img == null) return;
-      setState(() => _image = img);
+      if (!mounted) return;
+      if (bmp == null) {
+        // Render failed (transient pdfx error or queue hiccup): retry with a
+        // short backoff — the page must not stay blank.
+        if (_retries < 5) {
+          _retries++;
+          _retryTimer = Timer(
+            Duration(milliseconds: 350 * _retries),
+            _request,
+          );
+        }
+        return;
+      }
+      _retries = 0;
+      if (bmp.key != _retainedKey) {
+        _dropRetained();
+        _retainedKey = bmp.key;
+        widget.pdf.retain(bmp.key);
+      }
+      setState(() => _image = bmp.image);
     } finally {
       _pending = false;
     }
@@ -102,6 +150,8 @@ class _PdfPageTileState extends State<PdfPageTile> {
 
   @override
   void dispose() {
+    _retryTimer?.cancel();
+    _dropRetained();
     widget.pdf.renderTick.removeListener(_onTick);
     widget.viewport.renderTick.removeListener(_onTick);
     super.dispose();
@@ -127,17 +177,17 @@ class _PdfTilePainter extends CustomPainter {
   void paint(Canvas canvas, Size canvasSize) {
     final img = image;
     if (img == null) {
-      // Light paper-like placeholder until the render arrives (never a dark
-      // gray block — the page must look like paper while decoding).
+      // WHITE paper-like placeholder until the render arrives — never a
+      // gray block (a page that is still loading must look like paper).
       final r = RRect.fromRectAndRadius(
         Offset.zero & size,
         const Radius.circular(4),
       );
-      canvas.drawRRect(r, Paint()..color = const Color(0xFFF2F3F7));
+      canvas.drawRRect(r, Paint()..color = const Color(0xFFFFFFFF));
       canvas.drawRRect(
         r,
         Paint()
-          ..color = const Color(0x1A808898)
+          ..color = const Color(0x140EA5E9)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1,
       );

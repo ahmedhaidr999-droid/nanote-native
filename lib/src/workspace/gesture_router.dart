@@ -153,7 +153,7 @@ class GestureRouter {
 
   bool get _isEraserTool => _tool == Tool.eraser;
 
-  bool _wantsInk(Tool t) => t.isDrawingPen || t == Tool.laser;
+  bool _wantsInk(Tool t) => t.producesInk;
 
   // ------------------------------------------------------------- Listener
 
@@ -220,7 +220,12 @@ class GestureRouter {
 
       if (activeTouches == 0) {
         // First finger.
-        if (_isEraserTool && settings.settings.drawWithFinger) {
+        //
+        // The ERASER always erases with a finger — it removes ink, it never
+        // adds any, so the "draw with finger" guard must not apply to it
+        // (previously a finger with the eraser selected just panned, which
+        // users read as "the eraser is broken").
+        if (_isEraserTool) {
           _beginErase(e, stylus: false);
         } else if (_wantsInk(_tool) && settings.settings.drawWithFinger) {
           _beginDraw(e, stylus: false);
@@ -382,11 +387,16 @@ class GestureRouter {
 
     // Live eraser preview: circle follows the hovering pen / mouse whenever
     // the eraser tool (or hover-erase) is active.
+    //
+    // CURSOR RADIUS = the SCREEN-space erase radius (tools.eraserRadius —
+    // constant on screen at any zoom, mirroring _applyErase). Previously
+    // this was `eraserRadius * scale`, which at high zoom drew a HUGE faint
+    // circle that looked like a gray film covering the whole page.
     if (_isEraserTool || _hoverEraseActive) {
       _hoverCursorShown = true;
       engine.eraserCursor.value = EraserCursor(
         screenPos: e.localPosition,
-        radius: tools.eraserRadius * viewport.scale,
+        radius: tools.eraserRadius,
       );
     }
 
@@ -639,9 +649,12 @@ class GestureRouter {
     } else {
       engine.eraseAreaAt(er.pageId, pagePoint, radius);
     }
-    // Cursor radius is SCREEN space: page radius × current zoom.
+    // Cursor radius is SCREEN space and matches the erase area exactly:
+    // doc radius (eraserRadius / scale) × scale == eraserRadius — constant
+    // at any zoom (previously ×scale made the circle gigantic when zoomed
+    // in, reading as a gray film over the page).
     engine.eraserCursor.value =
-        EraserCursor(screenPos: screen, radius: tools.eraserRadius * viewport.scale);
+        EraserCursor(screenPos: screen, radius: tools.eraserRadius);
   }
 
   void _endErase() {
@@ -934,10 +947,10 @@ class GestureRouter {
         _hoverEraseActive = true;
         break;
       case PenAction.eraserToggle:
-        tools.tool = _tool == Tool.eraser ? Tool.fountain : Tool.eraser;
+        tools.tool = _tool == Tool.eraser ? Tool.pen : Tool.eraser;
         break;
       case PenAction.pen:
-        tools.tool = Tool.fountain;
+        tools.tool = Tool.pen;
         break;
       case PenAction.highlighter:
         tools.tool = Tool.highlighter;

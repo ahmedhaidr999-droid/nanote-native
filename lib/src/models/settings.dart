@@ -75,7 +75,16 @@ class AppSettings {
 
   // Remembered pen states (kind name -> {color, size}) + palette memory
   Map<String, dynamic> penStates;
-  List<int> favoriteColors; // up to 5
+
+  /// Selected KIND inside the grouped pen tool (fountain/ballpoint/…).
+  String penKind;
+
+  /// Favorite colors PER tool group (pens / highlighter / laser), up to 8.
+  List<int> penFavorites;
+  List<int> highlighterFavorites;
+  List<int> laserFavorites;
+
+  List<int> favoriteColors; // legacy — migrates into penFavorites
   List<int> recentColors;
 
   AppSettings({
@@ -93,10 +102,18 @@ class AppSettings {
     this.translateTarget = 'auto',
     this.aiService = 'chatgpt',
     Map<String, dynamic>? penStates,
+    String? penKind,
+    List<int>? penFavorites,
+    List<int>? highlighterFavorites,
+    List<int>? laserFavorites,
     List<int>? favoriteColors,
     List<int>? recentColors,
   })  : penActions = penActions ?? _defaults(),
         penStates = penStates ?? {},
+        penKind = penKind ?? 'fountain',
+        penFavorites = penFavorites ?? [],
+        highlighterFavorites = highlighterFavorites ?? [],
+        laserFavorites = laserFavorites ?? [],
         favoriteColors = favoriteColors ?? [],
         recentColors = recentColors ?? [];
 
@@ -141,6 +158,10 @@ class AppSettings {
         'translateTarget': translateTarget,
         'aiService': aiService,
         'penStates': penStates,
+        'penKind': penKind,
+        'penFavorites': penFavorites,
+        'highlighterFavorites': highlighterFavorites,
+        'laserFavorites': laserFavorites,
         'favoriteColors': favoriteColors,
         'recentColors': recentColors,
       };
@@ -160,6 +181,16 @@ class AppSettings {
         translateTarget: (j['translateTarget'] as String?) ?? 'auto',
         aiService: (j['aiService'] as String?) ?? 'chatgpt',
         penStates: (j['penStates'] as Map?)?.cast<String, dynamic>() ?? {},
+        penKind: (j['penKind'] as String?) ?? 'fountain',
+        penFavorites: ((j['penFavorites'] as List?) ?? [])
+            .map((e) => (e as num).toInt())
+            .toList(),
+        highlighterFavorites: ((j['highlighterFavorites'] as List?) ?? [])
+            .map((e) => (e as num).toInt())
+            .toList(),
+        laserFavorites: ((j['laserFavorites'] as List?) ?? [])
+            .map((e) => (e as num).toInt())
+            .toList(),
         favoriteColors: ((j['favoriteColors'] as List?) ?? [])
             .map((e) => (e as num).toInt())
             .toList(),

@@ -26,7 +26,6 @@ import '../ui/panels/text_sheet.dart' show showTextSheet;
 import '../ui/panels/translate_popup.dart' show showTranslatePopup;
 import 'doc_geometry.dart';
 import 'elements_painter.dart';
-import 'filmstrip.dart';
 import 'gesture_router.dart';
 import 'ink_painter.dart';
 import 'laser_overlay.dart';
@@ -36,7 +35,7 @@ import 'tool_rail.dart';
 import 'tool_settings_panel.dart';
 
 /// The full editor screen: header (back, title, undo/redo, zoom %, export
-/// menu, audio, pages, settings), body (filmstrip | transformed canvas stack |
+/// menu, audio, pages manager, settings), body (transformed canvas stack |
 /// tool rail), overlays (selection bar, laser, ruler, lasso, eraser circle),
 /// autosave and gesture-router wiring.
 class DocumentWorkspace extends StatefulWidget {
@@ -49,8 +48,6 @@ class DocumentWorkspace extends StatefulWidget {
 }
 
 class _DocumentWorkspaceState extends State<DocumentWorkspace> {
-  static const double _wideBreakpoint = 900;
-
   late final ViewportController viewport;
   late final DocGeometry geometry;
   late final RulerState ruler;
@@ -427,7 +424,6 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
         listenable: SettingsController.I,
         builder: (context, _) {
           final leftHanded = SettingsController.I.settings.leftHanded;
-          final wide = MediaQuery.sizeOf(context).width > _wideBreakpoint;
           final rail = ToolRail(
             tools: ToolController.I,
             engine: engine,
@@ -439,17 +435,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
             onRedo: engine.redo,
           );
           final canvas = Expanded(child: _buildCanvasArea(context));
-          final Widget? strip = wide
-              ? Filmstrip(
-                  engine: engine,
-                  viewport: viewport,
-                  geometry: geometry,
-                  onJump: _jumpToPage,
-                )
-              : null;
-          final row = leftHanded
-              ? [rail, if (strip != null) strip, canvas]
-              : [if (strip != null) strip, canvas, rail];
+          final row = leftHanded ? [rail, canvas] : [canvas, rail];
           return Row(children: row);
         },
       ),
@@ -519,10 +505,14 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
           onPressed: () => unawaited(showAudioPanel(context, engine)),
         ),
         IconButton(
-          icon: const Icon(Icons.layers),
+          icon: const Icon(Icons.auto_awesome_mosaic),
           tooltip: S.t('pages'),
-          onPressed: () => unawaited(
-              showPagesSheet(context, engine, onJump: _jumpToPage)),
+          onPressed: () => unawaited(showPagesSheet(
+            context,
+            engine,
+            onJump: _jumpToPage,
+            currentId: _currentMeta?.id,
+          )),
         ),
         IconButton(
           icon: const Icon(Icons.settings_outlined),
@@ -767,11 +757,13 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
 
   Widget _buildEraserCursor(BuildContext context) {
     final engine = StrokeEngine.I;
-    final error = Theme.of(context).colorScheme.error;
+    final scheme = Theme.of(context).colorScheme;
     return ValueListenableBuilder<EraserCursor?>(
       valueListenable: engine.eraserCursor,
       builder: (context, cur, _) {
         if (cur == null) return const SizedBox.shrink();
+        // Crisp, clearly-visible erase indicator: primary ring + faint
+        // primary fill + an eraser glyph (never a gray film).
         return Positioned(
           left: cur.screenPos.dx - cur.radius,
           top: cur.screenPos.dy - cur.radius,
@@ -780,9 +772,21 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
             height: cur.radius * 2,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: error.withValues(alpha: 0.08),
-              border: Border.all(color: error.withValues(alpha: 0.7), width: 1.5),
+              color: scheme.primary.withValues(alpha: 0.10),
+              border: Border.all(
+                color: scheme.primary.withValues(alpha: 0.85),
+                width: 1.6,
+              ),
             ),
+            child: cur.radius >= 18
+                ? Center(
+                    child: Icon(
+                      Icons.auto_fix_normal,
+                      size: math.min(cur.radius * 0.9, 22),
+                      color: scheme.primary.withValues(alpha: 0.9),
+                    ),
+                  )
+                : null,
           ),
         );
       },

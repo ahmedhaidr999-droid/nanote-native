@@ -171,14 +171,14 @@ class CoverDef {
 }
 
 const List<CoverDef> BUILTIN_COVERS = [
-  CoverDef('c1', [Color(0xFF1E6FF2), Color(0xFF6BA6FF)]),
+  CoverDef('c1', [Color(0xFF0EA5E9), Color(0xFF22D3EE)]),
   CoverDef('c2', [Color(0xFF0E7A5F), Color(0xFF6FE38B)]),
   CoverDef('c3', [Color(0xFF9333EA), Color(0xFFC9A6FF)]),
   CoverDef('c4', [Color(0xFFE5484D), Color(0xFFFF9F1C)]),
-  CoverDef('c5', [Color(0xFF16233A), Color(0xFF5A6B85)]),
+  CoverDef('c5', [Color(0xFF0B2540), Color(0xFF3E6C9E)]),
   CoverDef('c6', [Color(0xFFDB2777), Color(0xFFFF7EB6)]),
   CoverDef('c7', [Color(0xFFCA8A04), Color(0xFFFFD84D)]),
-  CoverDef('c8', [Color(0xFF2B2440), Color(0xFF7CC4FF)]),
+  CoverDef('c8', [Color(0xFF075985), Color(0xFF7DD3FC)]),
 ];
 
 CoverDef? coverById(String? id) {

@@ -8,33 +8,23 @@ import '../models/paper.dart';
 import '../models/stroke.dart';
 import '../models/tool.dart';
 import '../theme/nanote_theme.dart';
+import '../ui/panels/color_popover.dart' show ColorWheel, paletteFor;
 
 /// Floating per-tool settings panel, shown next to the tool rail.
 ///
 /// Behavior (user request): tapping a tool in the rail selects it AND opens
 /// its own settings (color, kind, properties); tapping the ACTIVE tool again
 /// closes the panel. Everything edits live through [ToolController].
+///
+/// v2.1:
+///  * PEN: the four pen KINDS (fountain / ballpoint / brush / fineliner) are
+///    chosen here — the pens are one grouped tool in the rail.
+///  * Spectrum color wheel INLINE (add any custom color), plus per-scope
+///    FAVORITES (pens / highlighter / laser) with a star toggle.
 class ToolSettingsPanel extends StatelessWidget {
   ToolSettingsPanel({super.key, required this.tools});
 
   final ToolController tools;
-
-  StrokeKind? _kindFor(Tool t) {
-    switch (t) {
-      case Tool.fountain:
-        return StrokeKind.fountain;
-      case Tool.ballpoint:
-        return StrokeKind.ballpoint;
-      case Tool.brush:
-        return StrokeKind.brush;
-      case Tool.fineliner:
-        return StrokeKind.fineliner;
-      case Tool.highlighter:
-        return StrokeKind.highlighter;
-      default:
-        return null;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -48,8 +38,8 @@ class ToolSettingsPanel extends StatelessWidget {
       builder: (context, _) {
         final t = tools.tool;
         return Container(
-          width: 268,
-          constraints: const BoxConstraints(maxHeight: 460),
+          width: 272,
+          constraints: const BoxConstraints(maxHeight: 470),
           decoration: BoxDecoration(
             color: scheme.surface,
             borderRadius: BorderRadius.circular(NANOTE_RADIUS + 2),
@@ -83,10 +73,15 @@ class ToolSettingsPanel extends StatelessWidget {
   // ---------------------------------------------------------------- header
 
   Widget _header(BuildContext context, ColorScheme scheme, Tool t) {
+    final colors = nanoteColors(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: nanoteColors(context).accent,
+        gradient: LinearGradient(
+          begin: AlignmentDirectional.centerStart,
+          end: AlignmentDirectional.centerEnd,
+          colors: colors.brandGradient,
+        ),
         borderRadius: const BorderRadius.vertical(
           top: Radius.circular(NANOTE_RADIUS + 2),
         ),
@@ -96,8 +91,8 @@ class ToolSettingsPanel extends StatelessWidget {
           Expanded(
             child: Text(
               S.t(t.key),
-              style: TextStyle(
-                color: scheme.primary,
+              style: const TextStyle(
+                color: Colors.white,
                 fontWeight: FontWeight.w700,
                 fontSize: 13,
               ),
@@ -106,9 +101,9 @@ class ToolSettingsPanel extends StatelessWidget {
           InkWell(
             borderRadius: BorderRadius.circular(20),
             onTap: tools.closeSettings,
-            child: Padding(
-              padding: const EdgeInsets.all(2),
-              child: Icon(Icons.close, size: 18, color: scheme.primary),
+            child: const Padding(
+              padding: EdgeInsets.all(2),
+              child: Icon(Icons.close, size: 18, color: Colors.white),
             ),
           ),
         ],
@@ -119,9 +114,11 @@ class ToolSettingsPanel extends StatelessWidget {
   // ----------------------------------------------------------------- body
 
   Widget _body(BuildContext context, ColorScheme scheme, Tool t) {
-    final kind = _kindFor(t);
-    if (kind != null) return _penBody(context, scheme, kind);
     switch (t) {
+      case Tool.pen:
+        return _penBody(scheme);
+      case Tool.highlighter:
+        return _highlighterBody(scheme);
       case Tool.eraser:
         return _eraserBody(scheme);
       case Tool.laser:
@@ -138,10 +135,9 @@ class ToolSettingsPanel extends StatelessWidget {
         return _hintBody('stickerHint');
       case Tool.pan:
         return _hintBody('panHint');
-      default:
-        return _hintBody('panHint');
     }
   }
+
   // ---------------------------------------------------------------- pieces
 
   Widget _label(String key) {
@@ -149,7 +145,7 @@ class ToolSettingsPanel extends StatelessWidget {
       padding: const EdgeInsets.only(top: 12, bottom: 6),
       child: Text(
         S.t(key),
-        style: TextStyle(
+        style: const TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.3,
@@ -164,80 +160,6 @@ class ToolSettingsPanel extends StatelessWidget {
       child: Text(
         S.t(key),
         style: const TextStyle(fontSize: 12.5, height: 1.5),
-      ),
-    );
-  }
-
-  /// Color swatch grid + favorites/recent rows.
-  Widget _colorPalette({
-    required List<Color> palette,
-    required int current,
-    required ValueChanged<int> onPick,
-    bool compact = false,
-  }) {
-    final favorites = tools.favoriteColors;
-    final recents = tools.recentColors;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final c in palette)
-              _swatch(c.toARGB32() == current, c, () {
-                onPick(c.toARGB32());
-                tools.addRecentColor(c.toARGB32());
-              }),
-          ],
-        ),
-        if (!compact && favorites.isNotEmpty) ...[
-          _label('favorites'),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final c in favorites)
-                _swatch(c == current, Color(c), () => onPick(c)),
-            ],
-          ),
-        ],
-        if (!compact && recents.isNotEmpty) ...[
-          _label('recentColors'),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final c in recents)
-                _swatch(c == current, Color(c), () => onPick(c)),
-            ],
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _swatch(bool selected, Color color, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 28,
-        height: 28,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: color,
-          border: Border.all(
-            color: selected ? Colors.black : Colors.white.withValues(alpha: 0.9),
-            width: selected ? 3 : 1.5,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.15),
-              blurRadius: 3,
-              offset: const Offset(0, 1),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -330,42 +252,102 @@ class ToolSettingsPanel extends StatelessWidget {
     );
   }
 
+  // ---------------------------------------------------- shared color picker
+
+  /// Palette + per-scope favorites + INLINE spectrum wheel + brightness —
+  /// applies live to [onPick].
+  Widget _colorSection({
+    required ColorScope scope,
+    required int current,
+    required ValueChanged<int> onPick,
+    required ColorScheme scheme,
+  }) {
+    return _ColorSection(
+      tools: tools,
+      scope: scope,
+      current: current,
+      onPick: onPick,
+      scheme: scheme,
+    );
+  }
+
   // ------------------------------------------------------------------ pens
 
-  Widget _penBody(BuildContext context, ColorScheme scheme, StrokeKind kind) {
-    final isHighlighter = kind == StrokeKind.highlighter;
-    final palette =
-        isHighlighter ? HIGHLIGHTER_PALETTE : INK_PALETTE;
-    final pen = tools.pen(kind);
+  static const Map<PenKind, IconData> _penKindIcons = {
+    PenKind.fountain: Icons.edit,
+    PenKind.ballpoint: Icons.draw,
+    PenKind.brush: Icons.brush,
+    PenKind.fineliner: Icons.edit_note,
+  };
+
+  Widget _penBody(ColorScheme scheme) {
+    final pen = tools.pen(tools.penKind.strokeKind);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _label('penType'),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final kind in PenKind.values)
+              _iconChip(
+                _penKindIcons[kind]!,
+                tools.penKind == kind,
+                S.t(kind.key),
+                () => tools.penKind = kind,
+                scheme,
+              ),
+          ],
+        ),
         _label('color'),
-        _colorPalette(
-          palette: palette,
+        _colorSection(
+          scope: ColorScope.pen,
           current: pen.color,
-          onPick: (c) => tools.setPenColor(c),
+          onPick: tools.setPenColor,
+          scheme: scheme,
         ),
         _label('width'),
         _slider(
           value: pen.size,
           min: 0.5,
-          max: isHighlighter ? 48 : 24,
+          max: 24,
           label: (v) => v.toStringAsFixed(1),
           onChanged: (v) => tools.setPenSize(v),
         ),
-        if (isHighlighter) ...[
-          _label('highlighterOpacity'),
-          _slider(
-            value: SettingsController.I.settings.highlighterOpacity,
-            min: 0.1,
-            max: 1.0,
-            divisions: 9,
-            label: (v) => '${(v * 100).round()}%',
-            onChanged: (v) =>
-                SettingsController.I.setHighlighterOpacity(v),
-          ),
-        ],
+      ],
+    );
+  }
+
+  Widget _highlighterBody(ColorScheme scheme) {
+    final pen = tools.pen(StrokeKind.highlighter);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _label('color'),
+        _colorSection(
+          scope: ColorScope.highlighter,
+          current: pen.color,
+          onPick: tools.setPenColor,
+          scheme: scheme,
+        ),
+        _label('width'),
+        _slider(
+          value: pen.size,
+          min: 0.5,
+          max: 48,
+          label: (v) => v.toStringAsFixed(1),
+          onChanged: (v) => tools.setPenSize(v),
+        ),
+        _label('highlighterOpacity'),
+        _slider(
+          value: SettingsController.I.settings.highlighterOpacity,
+          min: 0.1,
+          max: 1.0,
+          divisions: 9,
+          label: (v) => '${(v * 100).round()}%',
+          onChanged: (v) => SettingsController.I.setHighlighterOpacity(v),
+        ),
       ],
     );
   }
@@ -417,20 +399,14 @@ class ToolSettingsPanel extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _label('laserColor'),
-        _colorPalette(
-          palette: const [
-            Color(0xFFE5484D),
-            Color(0xFFFF9F1C),
-            Color(0xFF22A06B),
-            Color(0xFF1E6FF2),
-            Color(0xFF9333EA),
-          ],
+        _colorSection(
+          scope: ColorScope.laser,
           current: laser.color,
           onPick: (c) {
             laser.color = c;
             laser.tick();
           },
-          compact: true,
+          scheme: scheme,
         ),
         _label('laserMode'),
         _segmented<LaserMode>(
@@ -485,11 +461,11 @@ class ToolSettingsPanel extends StatelessWidget {
           ],
         ),
         _label('textColor'),
-        _colorPalette(
-          palette: INK_PALETTE,
+        _colorSection(
+          scope: ColorScope.pen,
           current: tools.textColor,
-          onPick: (c) => tools.setTextColor(c),
-          compact: true,
+          onPick: tools.setTextColor,
+          scheme: scheme,
         ),
         _label('style'),
         Wrap(
@@ -551,11 +527,11 @@ class ToolSettingsPanel extends StatelessWidget {
           ],
         ),
         _label('shape.strokeColor'),
-        _colorPalette(
-          palette: INK_PALETTE,
+        _colorSection(
+          scope: ColorScope.pen,
           current: tools.shapeStrokeColor,
-          onPick: (c) => tools.setShapeStrokeColor(c),
-          compact: true,
+          onPick: tools.setShapeStrokeColor,
+          scheme: scheme,
         ),
         _label('shape.strokeWidth'),
         _slider(
@@ -569,11 +545,11 @@ class ToolSettingsPanel extends StatelessWidget {
           tools.setShapeFillColor(v ? tools.shapeStrokeColor : null);
         }),
         if (tools.shapeFillColor != null) ...[
-          _colorPalette(
-            palette: INK_PALETTE,
+          _colorSection(
+            scope: ColorScope.pen,
             current: tools.shapeFillColor ?? tools.shapeStrokeColor,
-            onPick: (c) => tools.setShapeFillColor(c),
-            compact: true,
+            onPick: tools.setShapeFillColor,
+            scheme: scheme,
           ),
           _label('shape.fillOpacity'),
           _slider(
@@ -635,6 +611,260 @@ class ToolSettingsPanel extends StatelessWidget {
             size: 20,
             color: active ? scheme.primary : scheme.onSurfaceVariant,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Palette + favorites (per scope, with a star toggle) + the INLINE spectrum
+/// wheel with a brightness slider. Applies live.
+class _ColorSection extends StatefulWidget {
+  const _ColorSection({
+    required this.tools,
+    required this.scope,
+    required this.current,
+    required this.onPick,
+    required this.scheme,
+  });
+
+  final ToolController tools;
+  final ColorScope scope;
+  final int current;
+  final ValueChanged<int> onPick;
+  final ColorScheme scheme;
+
+  @override
+  State<_ColorSection> createState() => _ColorSectionState();
+}
+
+class _ColorSectionState extends State<_ColorSection> {
+  late HSVColor _hsv;
+
+  @override
+  void initState() {
+    super.initState();
+    _hsv = HSVColor.fromColor(Color(widget.current));
+  }
+
+  @override
+  void didUpdateWidget(covariant _ColorSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Follow external color changes (palette swatch taps) unless the user is
+    // mid-wheel-drag (thumb stays where it is; the apply button uses _hsv).
+    if (oldWidget.current != widget.current &&
+        widget.current != _hsv.toColor().toARGB32()) {
+      _hsv = HSVColor.fromColor(Color(widget.current));
+    }
+  }
+
+  void _pick(int argb) {
+    widget.onPick(argb);
+    widget.tools.addRecentColor(argb);
+  }
+
+  void _setWheel(HSVColor hsv) {
+    setState(() => _hsv = hsv);
+    widget.onPick(hsv.toColor().toARGB32());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.tools;
+    final scheme = widget.scheme;
+    final palette = paletteFor(widget.scope);
+    final favs = t.favoritesOf(widget.scope);
+    final wheelColor = _hsv.toColor().toARGB32();
+    final isFav = favs.contains(wheelColor);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final c in palette)
+              _swatch(c.toARGB32() == widget.current, c, () {
+                setState(() =>
+                    _hsv = HSVColor.fromColor(c));
+                _pick(c.toARGB32());
+              }),
+          ],
+        ),
+        if (favs.isNotEmpty) ...[
+          _label('favorites'),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final c in favs)
+                _swatch(c == widget.current, Color(c), () {
+                  setState(() =>
+                      _hsv = HSVColor.fromColor(Color(c)));
+                  _pick(c);
+                }),
+            ],
+          ),
+        ],
+        const SizedBox(height: 10),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 116,
+              height: 116,
+              child: ColorWheel(hsv: _hsv, onChanged: _setWheel),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: Color(wheelColor),
+                          borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+                          border: Border.all(color: const Color(0x33000000)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          wheelColor
+                              .toRadixString(16)
+                              .padLeft(8, '0')
+                              .toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(
+                    height: 36,
+                    child: Row(
+                      children: [
+                        Icon(Icons.brightness_6,
+                            size: 15, color: scheme.onSurfaceVariant),
+                        Expanded(
+                          child: SliderTheme(
+                            data: SliderThemeData(
+                              trackHeight: 3,
+                              thumbShape: const RoundSliderThumbShape(
+                                  enabledThumbRadius: 7),
+                            ),
+                            child: Slider(
+                              value: _hsv.value,
+                              min: 0.15,
+                              max: 1,
+                              onChanged: (v) => _setWheel(
+                                HSVColor.fromAHSV(1, _hsv.hue,
+                                    _hsv.saturation, v),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(
+                    height: 36,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: _starButton(isFav, scheme),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.tonalIcon(
+                            style: FilledButton.styleFrom(
+                              padding: EdgeInsets.zero,
+                              minimumSize: const Size(44, 36),
+                              textStyle: const TextStyle(fontSize: 11),
+                            ),
+                            onPressed: () => _pick(wheelColor),
+                            icon: const Icon(Icons.check, size: 14),
+                            label: Text(S.t('done')),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _starButton(bool isFav, ColorScheme scheme) {
+    return OutlinedButton.icon(
+      style: OutlinedButton.styleFrom(
+        padding: EdgeInsets.zero,
+        minimumSize: const Size(44, 36),
+        textStyle: const TextStyle(fontSize: 11),
+        side: BorderSide(
+          color: isFav ? scheme.primary : scheme.outline,
+        ),
+        foregroundColor: isFav ? scheme.primary : scheme.onSurfaceVariant,
+      ),
+      onPressed: () {
+        final argb = _hsv.toColor().toARGB32();
+        widget.tools.toggleFavoriteColor(argb, scope: widget.scope);
+        if (!widget.tools.favoritesOf(widget.scope).contains(argb)) {
+          // It was removed — nothing else to do.
+        } else {
+          _pick(argb);
+        }
+      },
+      icon: Icon(isFav ? Icons.star : Icons.star_border, size: 14),
+      label: Text(S.t(isFav ? 'unfavorite' : 'favorite')),
+    );
+  }
+
+  Widget _label(String key) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 6),
+      child: Text(
+        S.t(key),
+        style: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.3,
+        ),
+      ),
+    );
+  }
+
+  Widget _swatch(bool selected, Color color, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color,
+          border: Border.all(
+            color: selected ? Colors.black : Colors.white.withValues(alpha: 0.9),
+            width: selected ? 3 : 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 3,
+              offset: const Offset(0, 1),
+            ),
+          ],
         ),
       ),
     );
