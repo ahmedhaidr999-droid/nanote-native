@@ -91,6 +91,9 @@ class GestureRouter {
   /// True while a pan gesture with real movement is active.
   int _panMoveCount = 0;
 
+  /// Total pan travel (screen px) — a pan that stayed under ~18px is a TAP.
+  double _panDistance = 0;
+
   void dispose() {
     _barrelLongTimer?.cancel();
     tools.removeListener(_onToolsChanged);
@@ -337,7 +340,13 @@ class GestureRouter {
       return;
     }
     if (_panPointer == e.pointer) {
-      _endPan(e, p);
+      // A pan that never really moved is a TAP — feed the double-tap
+      // detector (previously the early return made finger double-tap zoom
+      // unreachable).
+      final wasTap = _endPan(e, p);
+      if (wasTap && p != null && p.kind == PointerDeviceKind.touch) {
+        _handleTapSequences(e.localPosition);
+      }
       return;
     }
     if (_deferredTap != null && _deferredTap!.pointer == e.pointer) {
@@ -346,8 +355,8 @@ class GestureRouter {
       return;
     }
 
-    // Finger double-tap detection (single finger).
-    if (p != null && p.kind == PointerDeviceKind.touch) {
+    // Finger double-tap detection (single finger, never rejected palms).
+    if (p != null && !p.rejected && p.kind == PointerDeviceKind.touch) {
       _handleTapSequences(e.localPosition);
     }
   }
@@ -821,10 +830,12 @@ class GestureRouter {
     _velSamples.clear();
     _velSamples.add(_VelSample(e.timeStamp, e.localPosition));
     _panMoveCount = 0;
+    _panDistance = 0;
   }
 
   void _trackPanVelocity(PointerMoveEvent e) {
     _panMoveCount++;
+    _panDistance += e.delta.distance;
     _velSamples.add(_VelSample(e.timeStamp, e.localPosition));
     // Keep a ~120ms window.
     while (_velSamples.length > 6) {
@@ -832,9 +843,11 @@ class GestureRouter {
     }
   }
 
-  /// Pan released → start the inertial fling when the finger was moving.
-  void _endPan(PointerUpEvent e, _Ptr? p) {
+  /// Pan released. Starts the inertial fling when the finger was moving;
+  /// returns true when the "pan" never really moved (i.e. it was a TAP).
+  bool _endPan(PointerUpEvent e, _Ptr? p) {
     _panPointer = -1;
+    final wasTap = _panDistance < 18;
     final samples = _velSamples;
     if (p != null &&
         p.kind == PointerDeviceKind.touch &&
@@ -851,11 +864,12 @@ class GestureRouter {
           final capped = speed > 6500 ? v * (6500 / speed) : v;
           viewport.startFling(capped);
           samples.clear();
-          return;
+          return false;
         }
       }
     }
     samples.clear();
+    return wasTap;
   }
 
   // ------------------------------------------------------------- taps
