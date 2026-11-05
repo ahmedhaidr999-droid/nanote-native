@@ -10,6 +10,31 @@ Full feature parity with the Nanote v1.9.1 web app, rebuilt native.
 <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
+## v2.0.1 — Editor fixes
+
+- **Writing offset FIXED**: all pointer math now uses canvas-local coordinates
+  (`e.localPosition`). Previously global window coordinates were mixed with the
+  canvas transform, so ink, taps, lasso, the pinch focal and the eraser circle
+  appeared ~56px away from the pen (app-bar height + rail width).
+- **PDF pages no longer float/move/shuffle**: page tiles are pinned with stable
+  `ValueKey`s (index-based Stack matching previously swapped one page's rendered
+  PDF onto another page while scrolling), each page adopts its real PDF aspect
+  ratio (no stretching), and the placeholder is light paper instead of gray.
+- **Centered pages**: opening/jumping fits the page width and keeps any axis
+  that fits the screen perfectly centered; pan is clamped to the document so
+  pages can never be pushed off-screen.
+- **Smooth continuous vertical scrolling**: inertial fling after panning
+  (exponential decay, stops on any new touch), like a document viewer.
+- **Tool settings panel**: tapping a rail tool selects it AND opens its own
+  settings (colors, width, eraser mode/size, laser, text, shapes); tapping the
+  active tool again closes the panel.
+- **Eraser**: live circle preview while hovering with the tool active (correct
+  screen-space radius under zoom), cursor position exact, cleared on tool switch.
+- **Writing quality**: real stylus pressure is used when it varies (velocity
+  simulation for finger/mouse), live strokes render without premature end taper.
+- CI workflow branch filter repaired (`main`), build 2.0.1.
+
+
 ## Getting the APK
 
 1. Go to the **Actions** tab → latest successful **Android APK** run →

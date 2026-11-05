@@ -215,8 +215,25 @@ class Stroke {
 
   double pressure(int i) => pts[i * 3 + 2];
 
-  void append(Offset p, double pressure) {
-    pts..add(p.dx)..add(p.dy)..add(pressure.clamp(0.0, 1.0));
+  /// Pressure range tracking: when a REAL stylus reports varying pressure
+  /// (min ≠ max) the outline uses it directly (simulatePressure=false).
+  /// Finger / mouse / constant-pressure styluses fall back to perfect-
+  /// freehand's velocity-simulated pressure for smooth, lively strokes.
+  double _pMin = 1;
+  double _pMax = 0;
+  bool _sawRealPressure = false;
+
+  bool get hasRealPressure =>
+      _sawRealPressure && (_pMax - _pMin) > 0.012;
+
+  void append(Offset p, double pressure, {bool realPressure = false}) {
+    final pr = pressure.clamp(0.0, 1.0);
+    pts..add(p.dx)..add(p.dy)..add(pr);
+    if (realPressure) {
+      _sawRealPressure = true;
+      if (pr < _pMin) _pMin = pr;
+      if (pr > _pMax) _pMax = pr;
+    }
     _outline = null;
     _bbox = null;
   }
@@ -260,13 +277,17 @@ class Stroke {
   }
 
   /// Perfect-freehand outline polygon in page space.
-  List<Offset> get outline {
-    if (_outline != null) return _outline!;
+  List<Offset> get outline => outlineOf(isComplete: true);
+
+  /// [isComplete=false] is used while the stroke is STILL being drawn: end
+  /// caps/tapers are not applied yet so the live tip looks natural.
+  List<Offset> outlineOf({bool isComplete = true}) {
+    if (_outline != null && isComplete) return _outline!;
     if (isEmpty) return const [];
     final total = pathLength;
 
     StrokeEndOptions start;
-    if (style.taperStart > 0) {
+    if (style.taperStart > 0 && isComplete) {
       start = StrokeEndOptions.start(
         cap: false,
         customTaper: style.taperStart >= 0.999 ? -1.0 : style.taperStart * total,
@@ -277,7 +298,7 @@ class Stroke {
     }
 
     StrokeEndOptions end;
-    if (style.taperEnd > 0) {
+    if (style.taperEnd > 0 && isComplete) {
       end = StrokeEndOptions.end(
         cap: false,
         customTaper: style.taperEnd >= 0.999 ? -1.0 : style.taperEnd * total,
@@ -287,32 +308,35 @@ class Stroke {
       end = StrokeEndOptions.end(cap: !square);
     }
 
+    final useReal = hasRealPressure;
     final inputs = <PointVector>[];
     for (var i = 0; i < pointCount; i++) {
-      final p = style.simulatePressure ? 0.5 : pressure(i);
+      final p = useReal ? pressure(i) : 0.5;
       inputs.add(PointVector(pts[i * 3], pts[i * 3 + 1], PressureCurve.apply(p)));
     }
 
-    _outline = getStroke(
+    final result = getStroke(
       inputs,
       options: StrokeOptions(
         size: style.size,
         thinning: style.thinning,
         smoothing: style.smoothing,
         streamline: style.streamline,
-        simulatePressure: style.simulatePressure,
-        isComplete: true,
+        simulatePressure: !useReal,
+        isComplete: isComplete,
         start: start,
         end: end,
       ),
     );
-    return _outline!;
+    if (isComplete) _outline = result;
+    return result;
   }
 
-  /// Path built from the outline polygon.
-  Path buildPath() {
+  /// Path built from the outline polygon. Pass [live] true while the stroke
+  /// is in progress (no end taper yet).
+  Path buildPath({bool live = false}) {
     final path = Path();
-    final o = outline;
+    final o = live ? outlineOf(isComplete: false) : outline;
     if (o.isEmpty) return path;
     path.moveTo(o[0].dx, o[0].dy);
     for (var i = 1; i < o.length; i++) {
@@ -359,6 +383,9 @@ class Stroke {
       groupId: groupId,
       pts: List<double>.of(pts),
     );
+    out._pMin = _pMin;
+    out._pMax = _pMax;
+    out._sawRealPressure = _sawRealPressure;
     for (var i = 0; i < out.pointCount; i++) {
       final p = f(out.point(i));
       out.pts[i * 3] = p.dx;
@@ -367,15 +394,21 @@ class Stroke {
     return out;
   }
 
-  Stroke deepCopy() => Stroke(
-        id: id,
-        z: z,
-        style: style.copyWith(),
-        tStart: tStart,
-        tEnd: tEnd,
-        groupId: groupId,
-        pts: List<double>.of(pts),
-      );
+  Stroke deepCopy() {
+    final out = Stroke(
+      id: id,
+      z: z,
+      style: style.copyWith(),
+      tStart: tStart,
+      tEnd: tEnd,
+      groupId: groupId,
+      pts: List<double>.of(pts),
+    );
+    out._pMin = _pMin;
+    out._pMax = _pMax;
+    out._sawRealPressure = _sawRealPressure;
+    return out;
+  }
 
   Map<String, dynamic> toJson() => {
         'id': id,

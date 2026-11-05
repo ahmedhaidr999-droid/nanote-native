@@ -20,6 +20,13 @@ import '../controllers/viewport_controller.dart';
 
 /// Raw-Listener input routing. NO GestureDetector / GestureArena.
 ///
+/// v2.0.1 CRITICAL FIX: every spatial computation uses the pointer's
+/// LOCAL position relative to the canvas Listener — `e.localPosition`.
+/// (Previously `e.position` — GLOBAL window coordinates — was mixed with the
+/// canvas-local viewport transform, offsetting all ink, taps, lassos, the
+/// pinch focal and the eraser cursor by the app-bar height and rail width,
+/// i.e. ink appeared ~56px away from the pen.)
+///
 /// Routing rules (v1.9.1 solved patterns):
 ///  * stylus → always draws (or erases in eraser mode)
 ///  * invertedStylus OR buttons bit 32 (kPrimaryEraserButton) → eraser
@@ -29,7 +36,8 @@ import '../controllers/viewport_controller.dart';
 ///      - double press <350ms → double action
 ///      - held ≥650ms → long action
 ///  * finger: draws only when "draw with finger" is enabled (default OFF);
-///    1 finger = pan; 2 fingers = pinch zoom + pan (focal preserved)
+///    1 finger = pan (with inertial fling on release); 2 fingers = pinch
+///    zoom + pan (focal preserved)
 ///  * palm rejection: ANY touch while a stylus stroke is active is ignored
 ///  * 2nd pointer during finger-draw → cancel stroke, convert to pinch
 ///  * finger double-tap → configurable (default zoom toggle 1x/2x at point)
@@ -51,7 +59,9 @@ class GestureRouter {
     this.onPickImage,
     this.onPickSticker,
     this.onPageChanged,
-  });
+  }) {
+    tools.addListener(_onToolsChanged);
+  }
 
   final ViewportController viewport;
   final StrokeEngine engine;
@@ -70,6 +80,31 @@ class GestureRouter {
 
   /// Screen size of the workspace (set by the workspace each frame).
   Size screenSize = Size.zero;
+
+  /// Live eraser preview: while the eraser tool (or hover-erase) is active,
+  /// a circle follows the hovering pen / mouse. Cleared when the tool changes.
+  bool _hoverCursorShown = false;
+
+  /// Pan velocity samples for the release fling (recent last).
+  final List<_VelSample> _velSamples = [];
+
+  /// True while a pan gesture with real movement is active.
+  int _panMoveCount = 0;
+
+  void dispose() {
+    _barrelLongTimer?.cancel();
+    tools.removeListener(_onToolsChanged);
+  }
+
+  void _onToolsChanged() {
+    // Leaving the eraser (or hover-erase) removes the preview circle.
+    if (!_isEraserTool && !_hoverEraseActive && _erase == null) {
+      if (_hoverCursorShown) {
+        _hoverCursorShown = false;
+        engine.eraserCursor.value = null;
+      }
+    }
+  }
 
   // ------------------------------------------------------------- pointers
 
@@ -123,6 +158,9 @@ class GestureRouter {
     PenBus.I.publish(e, hover: false);
     final kind = e.kind;
 
+    // Any new pointer stops an in-flight inertial scroll.
+    if (viewport.isFlinging) viewport.stopFling();
+
     // Palm rejection: any touch while a stylus stroke is active.
     if (_stylusDrawActive && kind == PointerDeviceKind.touch) {
       _pointers[e.pointer] = _Ptr(e.pointer, kind, rejected: true);
@@ -149,11 +187,11 @@ class GestureRouter {
       } else if (_tool == Tool.pan) {
         _beginPan(e);
       } else if (_tool == Tool.text) {
-        _deferredTap = _DeferredTap(e.position, e.pointer);
+        _deferredTap = _DeferredTap(e.localPosition, e.pointer);
       } else if (_tool == Tool.image) {
-        _deferredTap = _DeferredTap(e.position, e.pointer);
+        _deferredTap = _DeferredTap(e.localPosition, e.pointer);
       } else if (_tool == Tool.sticker) {
-        _deferredTap = _DeferredTap(e.position, e.pointer);
+        _deferredTap = _DeferredTap(e.localPosition, e.pointer);
       } else {
         _beginPan(e);
       }
@@ -183,11 +221,11 @@ class GestureRouter {
           _beginErase(e, stylus: false);
         } else if (_wantsInk(_tool) && settings.settings.drawWithFinger) {
           _beginDraw(e, stylus: false);
-        } else if (_tool == Tool.lasso && _selectionHit(e.position) != null) {
+        } else if (_tool == Tool.lasso && _selectionHit(e.localPosition) != null) {
           _beginSelGesture(e);
         } else if (_tool == Tool.lasso) {
           _beginLasso(e);
-        } else if (ruler != null && ruler!.active && _hitRuler(_toDoc(e.position))) {
+        } else if (ruler != null && ruler!.active && _hitRuler(_toDoc(e.localPosition))) {
           _beginRulerDrag(e);
         } else {
           _beginPan(e);
@@ -197,9 +235,10 @@ class GestureRouter {
         final first = _pointers.values
             .firstWhere((p) => p.kind == PointerDeviceKind.touch && !p.rejected && p.pointer != e.pointer);
         if (_panPointer == first.pointer) _panPointer = -1;
+        _velSamples.clear();
         _cancelLasso();
         _cancelSelGesture();
-        _startPinch(first.lastPos, e.position, first.pointer, e.pointer);
+        _startPinch(first.lastPos, e.localPosition, first.pointer, e.pointer);
         _twoFingerDownAt ??= DateTime.now();
       }
       return;
@@ -228,7 +267,7 @@ class GestureRouter {
     final p = _pointers[e.pointer];
     if (p == null) return;
     if (p.rejected) return;
-    p.lastPos = e.position;
+    p.lastPos = e.localPosition;
     PenBus.I.publish(e, hover: false);
 
     if (_draw != null && _draw!.pointer == e.pointer) {
@@ -248,7 +287,7 @@ class GestureRouter {
       return;
     }
     if (_rulerDrag != null && _rulerDrag!.pointer == e.pointer) {
-      ruler!.moveTo(_toDoc(e.position));
+      ruler!.moveTo(_toDoc(e.localPosition));
       return;
     }
     if (_pinch != null && (e.pointer == _pinch!.a || e.pointer == _pinch!.b)) {
@@ -257,11 +296,12 @@ class GestureRouter {
     }
     if (_panPointer == e.pointer) {
       viewport.panBy(e.delta);
+      _trackPanVelocity(e);
       return;
     }
     if (_deferredTap != null && _deferredTap!.pointer == e.pointer) {
       // Moved too far → it's a drag, not a tap.
-      if ((e.position - _deferredTap!.screen).distance > 18) {
+      if ((e.localPosition - _deferredTap!.screen).distance > 18) {
         _deferredTap = null;
         _beginPan(e);
       }
@@ -297,18 +337,18 @@ class GestureRouter {
       return;
     }
     if (_panPointer == e.pointer) {
-      _panPointer = -1;
+      _endPan(e, p);
       return;
     }
     if (_deferredTap != null && _deferredTap!.pointer == e.pointer) {
-      _fireDeferredTap(e.position);
+      _fireDeferredTap(e.localPosition);
       _deferredTap = null;
       return;
     }
 
     // Finger double-tap detection (single finger).
     if (p != null && p.kind == PointerDeviceKind.touch) {
-      _handleTapSequences(e.position);
+      _handleTapSequences(e.localPosition);
     }
   }
 
@@ -321,12 +361,26 @@ class GestureRouter {
     if (_pinch != null && (e.pointer == _pinch!.a || e.pointer == _pinch!.b)) {
       _endPinch(e.pointer);
     }
-    if (_panPointer == e.pointer) _panPointer = -1;
+    if (_panPointer == e.pointer) {
+      _panPointer = -1;
+      _velSamples.clear();
+    }
     _deferredTap = null;
   }
 
   void onPointerHover(PointerHoverEvent e) {
     PenBus.I.publish(e, hover: true);
+
+    // Live eraser preview: circle follows the hovering pen / mouse whenever
+    // the eraser tool (or hover-erase) is active.
+    if (_isEraserTool || _hoverEraseActive) {
+      _hoverCursorShown = true;
+      engine.eraserCursor.value = EraserCursor(
+        screenPos: e.localPosition,
+        radius: tools.eraserRadius * viewport.scale,
+      );
+    }
+
     if (e.kind != PointerDeviceKind.stylus &&
         e.kind != PointerDeviceKind.invertedStylus) {
       return;
@@ -388,7 +442,7 @@ class GestureRouter {
   void onPointerPanZoomUpdate(PointerPanZoomUpdateEvent e) {
     viewport.panBy(e.pan);
     if ((e.scale - _lastTrackpadScale).abs() > 0.001) {
-      viewport.zoomBy(e.scale / _lastTrackpadScale, e.position);
+      viewport.zoomBy(e.scale / _lastTrackpadScale, e.localPosition);
       _lastTrackpadScale = e.scale;
     }
   }
@@ -403,17 +457,18 @@ class GestureRouter {
   void _beginDraw(PointerDownEvent e, {required bool stylus, bool mouse = false}) {
     // Laser never commits to the document.
     if (_tool == Tool.laser) {
-      final doc = _toDoc(e.position);
+      final doc = _toDoc(e.localPosition);
       final pageId = _pageIdAtDoc(doc);
       if (pageId == null) return;
       _draw = _Draw(e.pointer, stylus,
           laser: true, pageId: pageId, lastDoc: doc)
-        ..lastMoveScreen = e.position;
+        ..lastScreen = e.localPosition
+        ..lastMoveScreen = e.localPosition;
       tools.laser.beginStroke(pageId);
       tools.laser.addPoint(geometry.toPage(doc, pageId));
       return;
     }
-    final doc = _toDoc(e.position);
+    final doc = _toDoc(e.localPosition);
     final pageId = _pageIdAtDoc(doc);
     if (pageId == null) return;
     engine.ensureLoaded(pageId);
@@ -422,23 +477,26 @@ class GestureRouter {
     engine.beginStroke(pageId, style);
     _draw = _Draw(e.pointer, stylus,
         pageId: pageId, lastDoc: doc, mouse: mouse)
-      ..lastMoveScreen = e.position;
+      ..lastScreen = e.localPosition
+      ..lastMoveScreen = e.localPosition;
     final pressure = mouse ? 0.5 : e.pressure;
+    final realPressure = stylus && !mouse;
     if (ruler != null && ruler!.active) {
       // Ruler lives in DOC space; ink is extended in PAGE space.
       final snappedDoc = ruler!.snap(doc);
       final snappedPage =
           snappedDoc == null ? null : geometry.toPage(snappedDoc, pageId);
-      engine.extendStroke(snappedPage ?? pagePoint, pressure);
+      engine.extendStroke(snappedPage ?? pagePoint, pressure,
+          realPressure: realPressure);
     } else {
-      engine.extendStroke(pagePoint, pressure);
+      engine.extendStroke(pagePoint, pressure, realPressure: realPressure);
     }
     _startHoldTimer();
   }
 
   void _extendDraw(PointerMoveEvent e) {
     final d = _draw!;
-    final doc = _toDoc(e.position);
+    final doc = _toDoc(e.localPosition);
     // Laser: page was fixed at gesture start.
     if (d.laser) {
       tools.laser.addPoint(geometry.toPage(doc, d.pageId!));
@@ -454,6 +512,7 @@ class GestureRouter {
     }
     final pagePoint = _toPage(doc, pageId);
     final pressure = d.mouse ? 0.5 : e.pressure;
+    final realPressure = d.stylus && !d.mouse;
 
     if (ruler != null && ruler!.active) {
       // Ruler lives in DOC space; ink is extended in PAGE space.
@@ -461,7 +520,7 @@ class GestureRouter {
       final snappedPage =
           snappedDoc == null ? null : geometry.toPage(snappedDoc, pageId);
       if (snappedPage != null) {
-        engine.extendStroke(snappedPage, pressure);
+        engine.extendStroke(snappedPage, pressure, realPressure: realPressure);
         d.snappedLast = true;
         d.lastDoc = doc;
         _cancelHoldTimer();
@@ -470,15 +529,16 @@ class GestureRouter {
       d.snappedLast = false;
     }
 
-    engine.extendStroke(pagePoint, pressure);
+    engine.extendStroke(pagePoint, pressure, realPressure: realPressure);
     d.lastDoc = doc;
+    d.lastScreen = e.localPosition;
 
     // Draw & hold recognition.
     if (d.stylus &&
         settings.settings.shapeDetection &&
         tools.tool.isDrawingPen &&
         tools.tool != Tool.highlighter) {
-      final dist = (e.position - d.lastMoveScreen).distance;
+      final dist = (e.localPosition - d.lastMoveScreen).distance;
       if (dist < 2.2) {
         if (_holdSince == null) {
           _holdSince = DateTime.now();
@@ -488,7 +548,7 @@ class GestureRouter {
       } else {
         _holdSince = DateTime.now();
       }
-      d.lastMoveScreen = e.position;
+      d.lastMoveScreen = e.localPosition;
     }
   }
 
@@ -549,16 +609,16 @@ class GestureRouter {
   // ------------------------------------------------------------- eraser
 
   void _beginErase(PointerDownEvent e, {required bool stylus}) {
-    final doc = _toDoc(e.position);
+    final doc = _toDoc(e.localPosition);
     final pageId = _pageIdAtDoc(doc);
     if (pageId == null) return;
     engine.ensureLoaded(pageId);
     engine.beginEraserGesture(pageId);
     _erase = _Erase(e.pointer, stylus, pageId);
-    _applyErase(e.position);
+    _applyErase(e.localPosition);
   }
 
-  void _extendErase(PointerMoveEvent e) => _applyErase(e.position);
+  void _extendErase(PointerMoveEvent e) => _applyErase(e.localPosition);
 
   void _applyErase(Offset screen) {
     final er = _erase!;
@@ -570,8 +630,9 @@ class GestureRouter {
     } else {
       engine.eraseAreaAt(er.pageId, pagePoint, radius);
     }
+    // Cursor radius is SCREEN space: page radius × current zoom.
     engine.eraserCursor.value =
-        EraserCursor(screenPos: screen, radius: tools.eraserRadius);
+        EraserCursor(screenPos: screen, radius: tools.eraserRadius * viewport.scale);
   }
 
   void _endErase() {
@@ -583,7 +644,7 @@ class GestureRouter {
   // ------------------------------------------------------------- lasso
 
   void _beginLasso(PointerDownEvent e) {
-    final doc = _toDoc(e.position);
+    final doc = _toDoc(e.localPosition);
     final pageId = _pageIdAtDoc(doc);
     if (pageId == null) return;
     engine.ensureLoaded(pageId);
@@ -593,7 +654,7 @@ class GestureRouter {
 
   void _extendLasso(PointerMoveEvent e) {
     final l = _lasso!;
-    final doc = _toDoc(e.position);
+    final doc = _toDoc(e.localPosition);
     final pts = List<Offset>.of(engine.lassoPreview.value)
       ..add(_toPage(doc, l.pageId));
     engine.lassoPreview.value = pts;
@@ -630,7 +691,7 @@ class GestureRouter {
   }
 
   void _beginSelGesture(PointerDownEvent e) {
-    final doc = _toDoc(e.position);
+    final doc = _toDoc(e.localPosition);
     final pageId = engine.selectionPageId!;
     final pagePoint = geometry.toPage(doc, pageId);
     final tol = 22 / viewport.scale;
@@ -644,7 +705,7 @@ class GestureRouter {
 
   void _extendSelGesture(PointerMoveEvent e) {
     final g = _selGesture!;
-    final doc = _toDoc(e.position);
+    final doc = _toDoc(e.localPosition);
     final pagePoint = geometry.toPage(doc, g.pageId);
     switch (g.handle) {
       case SelHandle.none:
@@ -704,7 +765,7 @@ class GestureRouter {
 
   void _beginRulerDrag(PointerDownEvent e) {
     _rulerDrag = _RulerDrag(e.pointer);
-    ruler!.beginDrag(_toDoc(e.position));
+    ruler!.beginDrag(_toDoc(e.localPosition));
   }
 
   // ------------------------------------------------------------- pinch
@@ -715,15 +776,15 @@ class GestureRouter {
 
   void _startPinchFromDraw(_Draw keep, PointerDownEvent second) {
     _pinch = _Pinch(
-        keep.pointer, second.pointer, keep.lastScreen, second.position, viewport.scale, viewport.pan);
+        keep.pointer, second.pointer, keep.lastScreen, second.localPosition, viewport.scale, viewport.pan);
   }
 
   void _extendPinch(PointerMoveEvent e) {
     final p = _pinch!;
     if (e.pointer == p.a) {
-      p.posA = e.position;
+      p.posA = e.localPosition;
     } else {
-      p.posB = e.position;
+      p.posB = e.localPosition;
     }
     // Focal point stays under the fingers; focal movement pans.
     final focal = (p.posA + p.posB) / 2;
@@ -756,7 +817,45 @@ class GestureRouter {
   void _beginPan(PointerEvent e) {
     _panPointer = e.pointer;
     _pointers[e.pointer] ??= _Ptr(e.pointer, e.kind);
-    _pointers[e.pointer]!.lastPos = e.position;
+    _pointers[e.pointer]!.lastPos = e.localPosition;
+    _velSamples.clear();
+    _velSamples.add(_VelSample(e.timeStamp, e.localPosition));
+    _panMoveCount = 0;
+  }
+
+  void _trackPanVelocity(PointerMoveEvent e) {
+    _panMoveCount++;
+    _velSamples.add(_VelSample(e.timeStamp, e.localPosition));
+    // Keep a ~120ms window.
+    while (_velSamples.length > 6) {
+      _velSamples.removeAt(0);
+    }
+  }
+
+  /// Pan released → start the inertial fling when the finger was moving.
+  void _endPan(PointerUpEvent e, _Ptr? p) {
+    _panPointer = -1;
+    final samples = _velSamples;
+    if (p != null &&
+        p.kind == PointerDeviceKind.touch &&
+        samples.length >= 2 &&
+        _panMoveCount >= 2) {
+      final first = samples.first;
+      final last = samples.last;
+      final dt =
+          last.timeStamp.inMicroseconds - first.timeStamp.inMicroseconds;
+      if (dt > 8000) {
+        final v = (last.position - first.position) * (1e6 / dt);
+        final speed = v.distance;
+        if (speed > 120) {
+          final capped = speed > 6500 ? v * (6500 / speed) : v;
+          viewport.startFling(capped);
+          samples.clear();
+          return;
+        }
+      }
+    }
+    samples.clear();
   }
 
   // ------------------------------------------------------------- taps
@@ -918,7 +1017,8 @@ class _Ptr {
   bool rejected;
   Offset lastPos;
 
-  _Ptr(this.pointer, this.kind, {this.rejected = false, this.lastPos = Offset.zero});
+  _Ptr(this.pointer, this.kind, {this.rejected = false})
+      : lastPos = Offset.zero;
 }
 
 class _Draw {
@@ -928,14 +1028,14 @@ class _Draw {
   final bool mouse;
   int? pageId;
   Offset lastDoc = Offset.zero;
+
+  /// Last CANVAS-LOCAL screen position (for pinch conversion).
   Offset lastScreen = Offset.zero;
   Offset lastMoveScreen = Offset.zero;
   bool snappedLast = false;
 
   _Draw(this.pointer, this.stylus,
-      {this.laser = false, this.pageId, this.lastDoc = Offset.zero, this.mouse = false}) {
-    lastScreen = lastDoc;
-  }
+      {this.laser = false, this.pageId, this.lastDoc = Offset.zero, this.mouse = false});
 }
 
 class _Erase {
@@ -995,4 +1095,12 @@ class _DeferredTap {
   final int pointer;
 
   _DeferredTap(this.screen, this.pointer);
+}
+
+/// One pan velocity sample (event timestamp + canvas-local position).
+class _VelSample {
+  final Duration timeStamp;
+  final Offset position;
+
+  _VelSample(this.timeStamp, this.position);
 }

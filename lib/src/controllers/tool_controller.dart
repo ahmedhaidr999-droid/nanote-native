@@ -37,12 +37,43 @@ class ToolController extends ChangeNotifier {
 
   Tool _tool = Tool.fountain;
 
+  /// Per-tool settings panel visibility (the tool rail toggles it: tap an
+  /// inactive tool → select + OPEN its settings; tap the ACTIVE tool again →
+  /// close the panel).
+  bool settingsOpen = false;
+
   /// Current tool (setter notifies listeners).
   Tool get tool => _tool;
   set tool(Tool t) {
     if (_tool == t) return;
     _tool = t;
     notifyListeners();
+  }
+
+  /// Rail tap behavior: re-tapping the active tool toggles its settings
+  /// panel; tapping a new tool selects it and opens the panel.
+  void railTap(Tool t) {
+    if (_tool == t) {
+      settingsOpen = !settingsOpen;
+    } else {
+      _tool = t;
+      settingsOpen = true;
+    }
+    notifyListeners();
+  }
+
+  void openSettings() {
+    if (!settingsOpen) {
+      settingsOpen = true;
+      notifyListeners();
+    }
+  }
+
+  void closeSettings() {
+    if (settingsOpen) {
+      settingsOpen = false;
+      notifyListeners();
+    }
   }
 
   // ------------------------------------------------------------------ pens
@@ -81,13 +112,28 @@ class ToolController extends ChangeNotifier {
 
   // ---------------------------------------------------------------- eraser
 
-  EraserMode eraserMode = EraserMode.stroke;
+  EraserMode _eraserMode = EraserMode.stroke;
 
   /// Page-space eraser radius.
   double eraserRadius = 28;
 
   /// Eraser size presets (page-space radius).
   static const List<double> eraserPresets = [12, 28, 48];
+
+  EraserMode get eraserMode => _eraserMode;
+
+  set eraserMode(EraserMode m) {
+    if (_eraserMode == m) return;
+    _eraserMode = m;
+    notifyListeners();
+  }
+
+  void setEraserRadius(double r) {
+    final v = r < 6 ? 6.0 : (r > 96 ? 96.0 : r);
+    if (v == eraserRadius) return;
+    eraserRadius = v;
+    notifyListeners();
+  }
 
   /// Cycles the eraser radius through [eraserPresets].
   void cycleEraserPreset() {
@@ -107,6 +153,57 @@ class ToolController extends ChangeNotifier {
   bool shapeAspectLock = false;
   int shapeSides = 5; // polygon 3..12
 
+  void setShapeType(ShapeType t) {
+    if (shapeType == t) return;
+    shapeType = t;
+    notifyListeners();
+  }
+
+  void setShapeStrokeColor(int c) {
+    if (shapeStrokeColor == c) return;
+    shapeStrokeColor = c;
+    notifyListeners();
+  }
+
+  void setShapeStrokeWidth(double w) {
+    final v = w < 0.5 ? 0.5 : (w > 24 ? 24.0 : w);
+    if (v == shapeStrokeWidth) return;
+    shapeStrokeWidth = v;
+    notifyListeners();
+  }
+
+  void setShapeFillColor(int? c) {
+    if (shapeFillColor == c) return;
+    shapeFillColor = c;
+    notifyListeners();
+  }
+
+  void setShapeFillOpacity(double o) {
+    final v = o < 0.05 ? 0.05 : (o > 1 ? 1.0 : o);
+    if (v == shapeFillOpacity) return;
+    shapeFillOpacity = v;
+    notifyListeners();
+  }
+
+  void setShapeGridSnap(bool v) {
+    if (shapeGridSnap == v) return;
+    shapeGridSnap = v;
+    notifyListeners();
+  }
+
+  void setShapeAspectLock(bool v) {
+    if (shapeAspectLock == v) return;
+    shapeAspectLock = v;
+    notifyListeners();
+  }
+
+  void setShapeSides(int n) {
+    final v = n < 3 ? 3 : (n > 12 ? 12 : n);
+    if (v == shapeSides) return;
+    shapeSides = v;
+    notifyListeners();
+  }
+
   // ----------------------------------------------------------------- laser
 
   /// The laser pointer controller (laser settings live there).
@@ -121,6 +218,50 @@ class ToolController extends ChangeNotifier {
   bool textItalic = false;
   bool textUnderline = false;
   int textAlign = 0; // 0 start / 1 center / 2 end
+
+  void setTextColor(int c) {
+    if (textColor == c) return;
+    textColor = c;
+    notifyListeners();
+  }
+
+  void setTextSize(double s) {
+    final v = s < 8 ? 8.0 : (s > 96 ? 96.0 : s);
+    if (v == textSize) return;
+    textSize = v;
+    notifyListeners();
+  }
+
+  void setTextFont(TextFontId f) {
+    if (textFont == f) return;
+    textFont = f;
+    notifyListeners();
+  }
+
+  void setTextBold(bool v) {
+    if (textBold == v) return;
+    textBold = v;
+    notifyListeners();
+  }
+
+  void setTextItalic(bool v) {
+    if (textItalic == v) return;
+    textItalic = v;
+    notifyListeners();
+  }
+
+  void setTextUnderline(bool v) {
+    if (textUnderline == v) return;
+    textUnderline = v;
+    notifyListeners();
+  }
+
+  void setTextAlign(int a) {
+    final v = a < 0 ? 0 : (a > 2 ? 2 : a);
+    if (v == textAlign) return;
+    textAlign = v;
+    notifyListeners();
+  }
 
   // ----------------------------------------------------------------- style
 

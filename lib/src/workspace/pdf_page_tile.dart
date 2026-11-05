@@ -127,10 +127,19 @@ class _PdfTilePainter extends CustomPainter {
   void paint(Canvas canvas, Size canvasSize) {
     final img = image;
     if (img == null) {
-      // Subtle placeholder until the render arrives.
-      canvas.drawRect(
+      // Light paper-like placeholder until the render arrives (never a dark
+      // gray block — the page must look like paper while decoding).
+      final r = RRect.fromRectAndRadius(
         Offset.zero & size,
-        Paint()..color = const Color(0x14808898),
+        const Radius.circular(4),
+      );
+      canvas.drawRRect(r, Paint()..color = const Color(0xFFF2F3F7));
+      canvas.drawRRect(
+        r,
+        Paint()
+          ..color = const Color(0x1A808898)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
       );
       return;
     }

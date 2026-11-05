@@ -155,7 +155,9 @@ class ToolRail extends StatelessWidget {
         icon: Icon(_toolIcons[t], size: 22),
         color: active ? scheme.primary : colors.mutedFg,
         tooltip: S.t(t.key),
-        onPressed: () => tools.tool = t,
+        // Tap inactive tool → select + open its settings panel.
+        // Tap the ACTIVE tool again → toggle the panel closed/open.
+        onPressed: () => tools.railTap(t),
       ),
     );
   }

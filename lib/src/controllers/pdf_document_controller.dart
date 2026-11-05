@@ -152,6 +152,8 @@ class PdfDocumentController extends ChangeNotifier {
         page = await doc.getPage(pageNumber);
         _pageSizes[pageNumber] = Size(page.width, page.height);
         await page.close();
+        // Let listeners (workspace aspect apply + tiles) know a size landed.
+        renderTick.value++;
         return _pageSizes[pageNumber];
       } catch (_) {
         try {

@@ -93,7 +93,8 @@ class LiveStrokePainter extends CustomPainter {
     } else {
       paint.color = s.style.flutterColor;
     }
-    canvas.drawPath(s.buildPath(), paint);
+    // live=true: no end taper while the stroke is still growing.
+    canvas.drawPath(s.buildPath(live: true), paint);
   }
 
   @override

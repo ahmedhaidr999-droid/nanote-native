@@ -33,6 +33,7 @@ import 'laser_overlay.dart';
 import 'pdf_page_tile.dart';
 import 'ruler_overlay.dart';
 import 'tool_rail.dart';
+import 'tool_settings_panel.dart';
 
 /// The full editor screen: header (back, title, undo/redo, zoom %, export
 /// menu, audio, pages, settings), body (filmstrip | transformed canvas stack |
@@ -62,6 +63,10 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
   int? _currentPageId;
   bool _railHidden = false;
   bool _didInitialFit = false;
+
+  /// After the initial fit, re-fit once when the first PDF page aspect lands
+  /// (PDF notebooks start with a paper-size guess that gets corrected).
+  bool _refitOnAspect = false;
   Size _screenSize = Size.zero;
   final Set<int> _loadRequested = {};
 
@@ -74,11 +79,6 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     viewport = ViewportController();
     geometry = DocGeometry(engine.pages);
     ruler = RulerState();
-    _canvasRepaint = Listenable.merge([
-      viewport,
-      engine.pagesChanged,
-      AudioController.I, // drives the sync-replay cursor repaint
-    ]);
     router = GestureRouter(
       viewport: viewport,
       engine: engine,
@@ -94,6 +94,17 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
       onPickSticker: _onPickSticker,
       onPageChanged: _jumpToPage,
     );
+
+    // Canvas repaints on: viewport motion, page-list/geometry changes, audio
+    // replay clock — and PDF controller changes (doc opened / new renders /
+    // page-size resolutions that feed the per-page aspect override).
+    _canvasRepaint = Listenable.merge([
+      viewport,
+      engine.pagesChanged,
+      AudioController.I, // drives the sync-replay cursor repaint
+      PdfDocumentController.I,
+      PdfDocumentController.I.renderTick,
+    ]);
 
     // Painters resolve ImageEl src (relative path) through this hook — see
     // elements_painter.dart. AppImageCache.peekSync (Agent E) resolves via a
@@ -121,6 +132,53 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     if (!mounted) return;
     _startAutosave();
     setState(() {});
+  }
+
+  /// Per-page PDF aspect application: each notebook page whose PDF page size
+  /// is known adopts the PDF's aspect ratio (at the paper's base width), so
+  /// the PDF render is NEVER stretched and ink lands exactly on the content.
+  ///
+  /// Reads/kicks size resolution during build, but the ACTUAL application
+  /// (which notifies listeners — e.g. the filmstrip, built BEFORE the canvas)
+  /// is deferred to a post-frame callback so nothing is ever notified during
+  /// the build phase.
+  bool _pdfSizesScheduled = false;
+
+  void _applyPdfSizes() {
+    final pdf = PdfDocumentController.I;
+    final engine = StrokeEngine.I;
+    if (!pdf.isOpen || engine.pages.isEmpty) return;
+    final count = pdf.pageCount;
+    final pending = <(PageMeta, Size)>[];
+    for (var i = 0; i < engine.pages.length; i++) {
+      final meta = engine.pages[i];
+      if (meta.pdfSize != null) continue;
+      if (i >= count) break; // beyond the PDF → keep paper size
+      final ps = pdf.pageSize(i + 1); // 1-based; null → async resolve kicked
+      if (ps == null || ps.width <= 0 || ps.height <= 0) continue;
+      final base = meta.sizeDef.size;
+      pending.add((meta, Size(base.width, base.width * ps.height / ps.width)));
+    }
+    if (pending.isEmpty || _pdfSizesScheduled) return;
+    _pdfSizesScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pdfSizesScheduled = false;
+      if (!mounted) return;
+      var refit = _refitOnAspect;
+      for (final (meta, size) in pending) {
+        if (meta.pdfSize != null) continue;
+        engine.applyPdfPageSize(meta.id, size);
+        if (refit) {
+          // First aspect landed → re-fit page 0 so the opened view centers
+          // the REAL page instead of the paper-size guess.
+          refit = false;
+          _refitOnAspect = false;
+          if (_screenSize != Size.zero) {
+            viewport.fitPageWidth(geometry.pageRect(0), _screenSize);
+          }
+        }
+      }
+    });
   }
 
   void _updateRecordingClock() {
@@ -161,6 +219,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     AudioController.I.removeListener(_updateRecordingClock);
     SettingsController.I.removeListener(_onSettingsChanged);
     StrokeEngine.I.recordingClock = null;
+    router.dispose();
     unawaited(StrokeEngine.I.flush());
     unawaited(StrokeEngine.I.close());
     unawaited(PdfDocumentController.I.close());
@@ -190,7 +249,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     final idx = engine.pages.indexWhere((p) => p.id == pageId);
     if (idx < 0) return;
     _currentPageId = pageId;
-    viewport.fitRect(geometry.pageRect(idx), _screenSize, targetScale: 1.0);
+    viewport.fitPageWidth(geometry.pageRect(idx), _screenSize);
   }
 
   void _quickExport() {
@@ -201,7 +260,17 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
 
   void _resetZoom() {
     if (_screenSize == Size.zero) return;
-    viewport.zoomTo(1.0, _screenSize.center(Offset.zero));
+    final meta = _currentMeta;
+    if (meta == null) {
+      viewport.zoomTo(1.0, _screenSize.center(Offset.zero));
+      viewport.endInteraction();
+      return;
+    }
+    final idx = StrokeEngine.I.pages.indexOf(meta);
+    viewport.fitPageWidth(
+      geometry.pageRect(idx < 0 ? 0 : idx),
+      _screenSize,
+    );
     viewport.endInteraction();
   }
 
@@ -219,7 +288,9 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
   void _handlePointerDown(PointerDownEvent e) {
     final engine = StrokeEngine.I;
     if (engine.liveStroke.value == null) {
-      final meta = geometry.pageAt(viewport.toDoc(e.position));
+      // e.localPosition — canvas-relative. (e.position is window-GLOBAL;
+      // using it picked the page 56px below the pen.)
+      final meta = geometry.pageAt(viewport.toDoc(e.localPosition));
       if (meta != null && meta.id != _currentPageId) {
         setState(() => _currentPageId = meta.id);
       }
@@ -231,9 +302,11 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     if (_didInitialFit || _screenSize == Size.zero) return;
     if (StrokeEngine.I.pages.isEmpty) return;
     _didInitialFit = true;
+    _refitOnAspect = StrokeEngine.I.notebook?.pdfPath != null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      viewport.fitRect(geometry.pageRect(0), _screenSize, targetScale: 1.0);
+      // Notes-app style: fit the page WIDTH into the canvas, centered.
+      viewport.fitPageWidth(geometry.pageRect(0), _screenSize);
     });
   }
 
@@ -466,6 +539,12 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
         final size = constraints.biggest;
         _screenSize = size;
         router.screenSize = size;
+        // Viewport clamping: an axis where the doc fits stays centered, a
+        // larger axis keeps its edges within the view (pages can never be
+        // panned fully off-screen — the "floating away" fix).
+        viewport.screenExtent = size;
+        viewport.panBounds = geometry.tightBounds;
+        viewport.clampToDoc();
         _scheduleInitialFit();
         return Stack(
           fit: StackFit.expand,
@@ -486,6 +565,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
                 child: AnimatedBuilder(
                   animation: _canvasRepaint,
                   builder: (context, _) {
+                    _applyPdfSizes();
                     _syncCurrentPageFromCenter(size);
                     final visible =
                         geometry.visiblePages(viewport.visibleDocRect(size));
@@ -494,12 +574,28 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
                       transform: viewport.matrix,
                       child: Stack(
                         children: [
+                          // KEYED pages: without ValueKeys the Stack matches
+                          // children BY INDEX, so when the visible window
+                          // shifts (scroll), one page's tile STATE (with its
+                          // rendered PDF image) jumps onto ANOTHER page —
+                          // pages appeared to float/move/shuffle. Keys pin
+                          // each page subtree to its stable page id.
                           for (final meta in visible)
                             _buildPage(context, meta),
-                          // Doc-space overlays:
-                          RulerOverlay(ruler: ruler, viewport: viewport),
-                          _buildLassoOverlay(context),
-                          _buildSelectionHandles(context),
+                          // Doc-space overlays (keyed so their indices never
+                          // fight the variable-length page list above):
+                          KeyedSubtree(
+                            key: const ValueKey('overlay-ruler'),
+                            child: RulerOverlay(ruler: ruler, viewport: viewport),
+                          ),
+                          KeyedSubtree(
+                            key: const ValueKey('overlay-lasso'),
+                            child: _buildLassoOverlay(context),
+                          ),
+                          KeyedSubtree(
+                            key: const ValueKey('overlay-selection'),
+                            child: _buildSelectionHandles(context),
+                          ),
                         ],
                       ),
                     );
@@ -510,11 +606,45 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
             // Screen-space overlays (OUTSIDE the Listener so taps on the
             // action bar never reach the canvas router).
             IgnorePointer(child: _buildEraserCursor(context)),
+            // Floating per-tool settings panel (tapping the active tool in
+            // the rail toggles it).
+            _buildToolSettingsPanel(context),
             AnimatedBuilder(
               animation: viewport,
               builder: (context, _) => _buildSelectionBar(context),
             ),
           ],
+        );
+      },
+    );
+  }
+
+  /// Floating tool-settings panel anchored at the rail edge of the canvas.
+  /// Tap a rail tool → select + open; tap the ACTIVE tool again → close.
+  Widget _buildToolSettingsPanel(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([ToolController.I, SettingsController.I]),
+      builder: (context, _) {
+        if (_railHidden || !ToolController.I.settingsOpen) {
+          return const SizedBox.shrink();
+        }
+        final isRtl = Directionality.of(context) == TextDirection.rtl;
+        final leftHanded = SettingsController.I.settings.leftHanded;
+        // The Row places the rail at the outer edge; in RTL the visual order
+        // flips, so "rail on the right" ⇔ isRtl == leftHanded.
+        final railAtRight = isRtl == leftHanded;
+        return AnimatedSwitcher(
+          duration: const Duration(milliseconds: 160),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          child: Align(
+            key: ValueKey('panel-${ToolController.I.tool.name}'),
+            alignment: railAtRight ? Alignment.topRight : Alignment.topLeft,
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: ToolSettingsPanel(tools: ToolController.I),
+            ),
+          ),
         );
       },
     );
@@ -528,6 +658,9 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     final pdf = PdfDocumentController.I;
     final pdfOpen = pdf.isOpen && index >= 0 && index < pdf.pageCount;
     return Positioned.fromRect(
+      // Stable key: the page subtree (PDF tile state, laser overlay) always
+      // follows THIS page — never shuffled onto a neighbor on scroll.
+      key: ValueKey('page-${meta.id}'),
       rect: rect,
       child: Stack(
         children: [

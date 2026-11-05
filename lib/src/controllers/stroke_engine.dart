@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models/page_elements.dart';
@@ -19,6 +18,13 @@ class PageMeta {
   int pageSize;
   int paperColor;
 
+  /// Transient per-page PDF size override (doc units). When the notebook has
+  /// a PDF background, each page adopts the aspect of its PDF page so the
+  /// render is NEVER distorted and ink lands exactly on the PDF content.
+  /// Not persisted — re-applied from the PDF on open (see
+  /// StrokeEngine.applyPdfPageSize).
+  Size? pdfSize;
+
   PageMeta({
     required this.id,
     required this.position,
@@ -30,6 +36,9 @@ class PageMeta {
   });
 
   PageSizeDef get sizeDef => pageSizeDef(pageSizeIdFrom(pageSize));
+
+  /// The size used for layout: the PDF aspect when known, else the paper size.
+  Size get effectiveSize => pdfSize ?? sizeDef.size;
 
   factory PageMeta.from(PageEntity p) => PageMeta(
         id: p.id,
@@ -409,6 +418,24 @@ class StrokeEngine extends ChangeNotifier {
     }
   }
 
+  /// Applies a per-page PDF size override (see [PageMeta.pdfSize]) and
+  /// notifies layout listeners. Call for each page as PDF sizes resolve.
+  void applyPdfPageSize(int pageId, Size size) {
+    for (final p in pages) {
+      if (p.id == pageId) {
+        final cur = p.pdfSize;
+        if (cur != null &&
+            (cur.width - size.width).abs() < 0.5 &&
+            (cur.height - size.height).abs() < 0.5) {
+          return; // already correct
+        }
+        p.pdfSize = size;
+        pagesChanged.notifyListeners();
+        return;
+      }
+    }
+  }
+
   PageInk pageInk(int pageId) =>
       _inks.putIfAbsent(pageId, () => PageInk(pageId));
 
@@ -478,15 +505,15 @@ class StrokeEngine extends ChangeNotifier {
 
   int _livePage = -1;
 
-  void extendStroke(Offset pagePoint, double pressure) {
+  void extendStroke(Offset pagePoint, double pressure, {bool realPressure = false}) {
     final s = liveStroke.value;
     if (s == null) return;
     if (s.isEmpty) {
-      s.append(pagePoint, pressure);
+      s.append(pagePoint, pressure, realPressure: realPressure);
       // First point: also seed a tiny bit of history for nicer outlines.
-      s.append(pagePoint, pressure);
+      s.append(pagePoint, pressure, realPressure: realPressure);
     } else {
-      s.append(pagePoint, pressure);
+      s.append(pagePoint, pressure, realPressure: realPressure);
     }
     liveStroke.tick(); // re-notify listeners on every point
   }

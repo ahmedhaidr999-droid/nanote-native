@@ -20,18 +20,18 @@ class DocGeometry {
   DocGeometry(this.pages);
 
   /// Rect of the page at visual [pageIndex] (0-based). Y accumulates from
-  /// page 0 using each page's own size definition (PageMeta.pageSize →
-  /// pageSizeIdFrom → PAGE_SIZES).
+  /// page 0 using each page's own EFFECTIVE size (PageMeta.effectiveSize →
+  /// the PDF aspect for PDF notebooks, else the paper size definition).
   Rect pageRect(int pageIndex) {
     var y = 0.0;
     for (var i = 0; i < pageIndex && i < pages.length; i++) {
-      y += pages[i].sizeDef.h + pageGap;
+      y += pages[i].effectiveSize.height + pageGap;
     }
     double w;
     double h;
     if (pageIndex >= 0 && pageIndex < pages.length) {
-      w = pages[pageIndex].sizeDef.w;
-      h = pages[pageIndex].sizeDef.h;
+      w = pages[pageIndex].effectiveSize.width;
+      h = pages[pageIndex].effectiveSize.height;
     } else {
       // Defensive fallback for out-of-range indices (never crashes).
       final fallback = pageSizeDef(PageSizeId.a4Portrait);
@@ -75,16 +75,21 @@ class DocGeometry {
 
   /// Union of all page rects inflated by a generous margin (pan clamping /
   /// gesture bounds).
-  Rect get docBounds {
+  Rect get docBounds => tightBounds.inflate(400);
+
+  /// Union of all page rects WITHOUT inflation — used by the viewport clamp
+  /// (an axis that fits the screen stays centered; larger axes keep their
+  /// edges inside the view).
+  Rect get tightBounds {
     if (pages.isEmpty) {
       final fallback = pageSizeDef(PageSizeId.a4Portrait);
-      return Rect.fromLTWH(0, 0, fallback.w, fallback.h).inflate(400);
+      return Rect.fromLTWH(0, 0, fallback.w, fallback.h);
     }
     var bounds = pageRect(0);
     for (var i = 1; i < pages.length; i++) {
       bounds = bounds.expandToInclude(pageRect(i));
     }
-    return bounds.inflate(400);
+    return bounds;
   }
 
   /// Pages whose rects intersect [docRect] — viewport culling list.

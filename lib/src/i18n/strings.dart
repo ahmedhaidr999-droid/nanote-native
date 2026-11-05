@@ -202,6 +202,14 @@ class S {
     'saving': 'Saving…',
     'savingFailed': 'Saving failed',
 
+    // tool panel hints
+    'lassoHint':
+        'Circle the ink to select it. Drag inside to move, corners to scale, the top handle to rotate.',
+    'imageHint': 'Tap anywhere on the page to place an image there.',
+    'stickerHint': 'Tap anywhere on the page to place a sticker there.',
+    'panHint':
+        'Drag with one finger to scroll through the pages; pinch with two fingers to zoom. Flick to glide.',
+
     // text tool
     'textEdit': 'Edit text',
     'textHint': 'Type here…',
@@ -214,6 +222,7 @@ class S {
     'alignStart': 'Align start',
     'alignCenter': 'Align center',
     'alignEnd': 'Align end',
+    'style': 'Style',
 
     // fonts
     'font.system': 'Default',
@@ -247,6 +256,7 @@ class S {
     'shape.recognized': 'Shape recognized',
 
     // eraser
+    'eraserMode': 'Eraser mode',
     'eraserStroke': 'Erase strokes',
     'eraserArea': 'Area eraser',
     'eraserSize': 'Eraser size',
@@ -575,6 +585,14 @@ class S {
     'saving': 'جارٍ الحفظ…',
     'savingFailed': 'فشل الحفظ',
 
+    // tool panel hints
+    'lassoHint':
+        'ارسم دائرة حول الحبر لتحديده. اسحب من الداخل للنقل، ومن الأركان للتحجيم، ومن المقبض العلوي للتدوير.',
+    'imageHint': 'اضغط في أي مكان على الصفحة لإدراج صورة هناك.',
+    'stickerHint': 'اضغط في أي مكان على الصفحة لإدراج ملصق هناك.',
+    'panHint':
+        'اسحب بإصبع واحد للتنقل بين الصفحات، وقرّب بإصبعين. أرمِ الصفحة لتنزلق بسلاسة.',
+
     // text tool
     'textEdit': 'تحرير النص',
     'textHint': 'اكتب هنا…',
@@ -584,6 +602,7 @@ class S {
     'bold': 'عريض',
     'italic': 'مائل',
     'underline': 'تسطير',
+    'style': 'النمط',
     'alignStart': 'محاذاة البداية',
     'alignCenter': 'توسيط',
     'alignEnd': 'محاذاة النهاية',
@@ -620,6 +639,7 @@ class S {
     'shape.recognized': 'تم التعرف على الشكل',
 
     // eraser
+    'eraserMode': 'وضع الممحاة',
     'eraserStroke': 'مسح الحبر',
     'eraserArea': 'ممحاة مساحة',
     'eraserSize': 'حجم الممحاة',
