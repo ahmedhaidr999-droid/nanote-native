@@ -1,0 +1,32 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Platform folders are generated in CI via `flutter create` — never commit.
+android/
+ios/
+web/
+linux/
+macos/
+windows/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings
+
+# Generated
+*.mocks.dart
+
+# Misc
+*.log
+.DS_Store
+.metadata

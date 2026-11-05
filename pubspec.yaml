@@ -1,0 +1,53 @@
+name: nanote_native
+description: "Nanote Native — local-first handwriting notes app (Flutter, Android)."
+publish_to: "none"
+version: 2.0.0+1
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Ink engine — pressure-tapered stroke outlines.
+  perfect_freehand: ^2.5.2
+
+  # Local-first database.
+  isar: 3.1.0+1
+  isar_flutter_libs: 3.1.0+1
+
+  # Files.
+  path_provider: ^2.1.5
+  path: ^1.9.0
+  vector_math: ^2.1.4
+
+  # Pickers / sharing / links.
+  file_picker: ^8.1.6
+  share_plus: ^10.1.2
+  url_launcher: ^6.3.1
+
+  # Audio notes: record (AAC/m4a) + playback.
+  record: ^6.2.1
+  audioplayers: ^6.6.0
+
+  # PDF import (rendering only — no text layer on pdfx).
+  pdfx: ^2.11.0
+
+  # PDF export.
+  pdf: ^3.11.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  build_runner: 2.4.13
+  isar_generator: 3.1.0+1
+
+# pdfx 2.11 vendors an InteractiveViewer that calls Matrix4.translateByDouble/
+# scaleByDouble, added in vector_math 2.2.0 (Flutter 3.29 pins 2.1.4).
+dependency_overrides:
+  vector_math: 2.2.0
+
+flutter:
+  uses-material-design: true
