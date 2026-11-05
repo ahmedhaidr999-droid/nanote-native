@@ -70,13 +70,16 @@ jobs:
         run: flutter build apk --release --build-name=2.0.0 --build-number=${{ github.run_number }}
 
       - name: Sign APK (when keystore secrets are configured)
-        if: ${{ secrets.NANOTE_KEYSTORE_BASE64 != '' }}
         env:
           NANOTE_KEYSTORE_BASE64: ${{ secrets.NANOTE_KEYSTORE_BASE64 }}
           NANOTE_KEYSTORE_PASSWORD: ${{ secrets.NANOTE_KEYSTORE_PASSWORD }}
           NANOTE_KEY_ALIAS: ${{ secrets.NANOTE_KEY_ALIAS }}
           NANOTE_KEY_PASSWORD: ${{ secrets.NANOTE_KEY_PASSWORD }}
         run: |
+          if [ -z "$NANOTE_KEYSTORE_BASE64" ]; then
+            echo "No keystore secrets configured — keeping the debug-signed APK."
+            exit 0
+          fi
           echo -n "$NANOTE_KEYSTORE_BASE64" | base64 -d > /tmp/nanote.keystore
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           APK=build/app/outputs/flutter-apk/app-release.apk
