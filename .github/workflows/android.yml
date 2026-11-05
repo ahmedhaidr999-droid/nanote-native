@@ -53,17 +53,19 @@ jobs:
 
       - name: Patch Android manifest & id
         run: |
-          GRADLE=android/app/build.gradle
-          sed -i 's/com\.nanote\.nanote_native/com.nanote.native/' "$GRADLE"
+          # Flutter 3.29 generates Kotlin DSL: android/app/build.gradle.kts.
+          # Only the applicationId changes — the namespace stays, so the
+          # generated MainActivity package keeps matching the manifest.
+          GRADLE=android/app/build.gradle.kts
+          sed -i 's/applicationId = "com\.nanote\.nanote_native"/applicationId = "com.nanote.native"/' "$GRADLE"
           M=android/app/src/main/AndroidManifest.xml
           sed -i 's/android:label="nanote_native"/android:label="Nanote Native"/' "$M"
           sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/><uses-permission android:name="android.permission.RECORD_AUDIO"/><application|' "$M"
-          # targetSdk 35 = newest level fully supported by the pinned
-          # Flutter 3.29 toolchain (AGP 8.1). Bump to 36 together with a
-          # Flutter >= 3.35 toolchain + AGP 8.9.
-          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 35/' "$GRADLE"
+          # Flutter 3.29 defaults: minSdk 21, targetSdk 35 (newest fully
+          # supported by this toolchain). Bump to 36 with Flutter >= 3.35 +
+          # AGP 8.9.
           echo "--- patched ---"
-          grep -n "applicationId\|targetSdk" "$GRADLE" || true
+          grep -n "applicationId\|targetSdk\|minSdk" "$GRADLE" || true
           grep -n "label=\|uses-permission" "$M" || true
 
       - name: Build release APK
