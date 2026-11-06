@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 
@@ -24,9 +26,23 @@ import '../ui/panels/color_popover.dart'
 /// an INLINE mini spectrum wheel plus a "more colors" button that opens the
 /// full color popover, and per-scope FAVORITES with a star toggle.
 class ToolSettingsPanel extends StatelessWidget {
-  const ToolSettingsPanel({super.key, required this.tools});
+  const ToolSettingsPanel({
+    super.key,
+    required this.tools,
+    this.maxWidth = 256,
+    this.maxHeight = 470,
+    this.onClearPage,
+  });
 
   final ToolController tools;
+
+  /// §0-constrained panel box (the workspace passes the available room).
+  final double maxWidth;
+  final double maxHeight;
+
+  /// "Clear page" (eraser section): wipes the CURRENT page's ink + elements.
+  /// Two-stage confirm — the button arms first, a second tap within 3s fires.
+  final VoidCallback? onClearPage;
 
   @override
   Widget build(BuildContext context) {
@@ -41,8 +57,8 @@ class ToolSettingsPanel extends StatelessWidget {
       builder: (context, _) {
         final t = tools.tool;
         return Container(
-          width: 256,
-          constraints: const BoxConstraints(maxHeight: 470),
+          width: maxWidth,
+          constraints: BoxConstraints(maxHeight: maxHeight),
           decoration: BoxDecoration(
             color: scheme.surface,
             borderRadius: BorderRadius.circular(NANOTE_RADIUS),
@@ -136,6 +152,8 @@ class ToolSettingsPanel extends StatelessWidget {
         return _hintBody(context, 'stickerHint');
       case Tool.pan:
         return _hintBody(context, 'panHint');
+      case Tool.textSelect:
+        return _hintBody(context, 'textSelectHint');
     }
   }
 
@@ -288,6 +306,10 @@ class ToolSettingsPanel extends StatelessWidget {
               ),
           ],
         ),
+        if (onClearPage != null) ...[
+          const SizedBox(height: 14),
+          _ClearPageButton(onClearPage: onClearPage!),
+        ],
       ],
     );
   }
@@ -1191,6 +1213,74 @@ class _ColorSectionState extends State<_ColorSection> {
           const SizedBox(width: 4),
           Text(S.t('done')),
         ],
+      ),
+    );
+  }
+}
+
+
+/// "Clear page" with a TWO-STAGE confirm: the first tap ARMS the button
+/// (destructive styling + 3s window), the second tap fires [onClearPage].
+class _ClearPageButton extends StatefulWidget {
+  const _ClearPageButton({required this.onClearPage});
+
+  final VoidCallback onClearPage;
+
+  @override
+  State<_ClearPageButton> createState() => _ClearPageButtonState();
+}
+
+class _ClearPageButtonState extends State<_ClearPageButton> {
+  bool _armed = false;
+  Timer? _disarm;
+
+  @override
+  void dispose() {
+    _disarm?.cancel();
+    super.dispose();
+  }
+
+  void _tap() {
+    if (!_armed) {
+      setState(() => _armed = true);
+      _disarm?.cancel();
+      _disarm = Timer(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _armed = false);
+      });
+      return;
+    }
+    _disarm?.cancel();
+    setState(() => _armed = false);
+    widget.onClearPage();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final cs = nanoteColors(context);
+    return SizedBox(
+      width: double.infinity,
+      height: 40,
+      child: OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: _armed ? scheme.onError : scheme.error,
+          backgroundColor: _armed ? scheme.error : null,
+          side: BorderSide(color: scheme.error),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+          ),
+        ),
+        onPressed: _tap,
+        icon: Icon(LucideIcons.trash_2, size: 16),
+        label: Text(
+          S.t(_armed ? 'confirmClearPage' : 'clearPage'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: nanoteText(TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+          )),
+        ),
       ),
     );
   }

@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../models/page_elements.dart';
+import '../models/paper.dart';
 import '../models/settings.dart';
 import '../models/tool.dart';
 import '../workspace/doc_geometry.dart';
@@ -56,6 +58,7 @@ class GestureRouter {
     this.onToggleToolbar,
     this.onQuickExport,
     this.onTextTap,
+    this.onTextSelectTap,
     this.onPickImage,
     this.onPickSticker,
     this.onPageChanged,
@@ -74,6 +77,10 @@ class GestureRouter {
   final VoidCallback? onToggleToolbar;
   final VoidCallback? onQuickExport;
   final void Function(int pageId, Offset pagePoint)? onTextTap;
+
+  /// §7 text-select tool: tap a TextEl on a PDF/text page → the workspace
+  /// opens the translation popup for it.
+  final void Function(int pageId, Offset pagePoint)? onTextSelectTap;
   final void Function(int pageId, Offset pagePoint)? onPickImage;
   final void Function(int pageId, Offset pagePoint)? onPickSticker;
   final ValueChanged<int>? onPageChanged;
@@ -97,6 +104,9 @@ class GestureRouter {
   void dispose() {
     _barrelLongTimer?.cancel();
     tools.removeListener(_onToolsChanged);
+    cropSession.value?.dispose();
+    cropSession.dispose();
+    shapePreview.dispose();
   }
 
   void _onToolsChanged() {
@@ -118,7 +128,24 @@ class GestureRouter {
   _Lasso? _lasso;
   _SelGesture? _selGesture;
   _Pinch? _pinch;
+  _ShapeDrag? _shapeDrag;
   int _panPointer = -1;
+
+  // Crop-session drag state (§5).
+  int _cropPointer = -1;
+  CropCorner? _cropCorner;
+  Offset? _cropLastLocal;
+
+  /// Live shape-drag preview (§8) — the workspace paints this overlay.
+  final ValueNotifier<ShapeDragPreview?> shapePreview =
+      ValueNotifier<ShapeDragPreview?>(null);
+
+  /// Active image-crop session (§5) — non-null while the crop editor is
+  /// open; the workspace overlay paints from it and it swallows all
+  /// pointer input while active (modal).
+  final ValueNotifier<CropSession?> cropSession = ValueNotifier<CropSession?>(
+    null,
+  );
 
   DateTime? _lastTapUp;
   Offset _lastTapScreen = Offset.zero;
@@ -136,7 +163,8 @@ class GestureRouter {
   DateTime? _holdSince;
 
   bool get _stylusDrawActive =>
-      _draw != null && _draw!.stylus;
+      (_draw != null && _draw!.stylus) ||
+      (_shapeDrag != null && _shapeDrag!.stylus);
 
   // ------------------------------------------------------------- helpers
 
@@ -161,6 +189,10 @@ class GestureRouter {
     PenBus.I.publish(e, hover: false);
     final kind = e.kind;
 
+    // Modal crop session: every pointer only manipulates (or ignores) the
+    // crop window while the editor is open.
+    if (_handleCropDown(e)) return;
+
     // Any new pointer stops an in-flight inertial scroll.
     if (viewport.isFlinging) viewport.stopFling();
 
@@ -181,15 +213,26 @@ class GestureRouter {
       if ((e.buttons & kSecondaryStylusButton) != 0) {
         _barrelPressed(pattern: engine.liveStroke.value != null ? PenPattern.pressWriting : PenPattern.press);
       }
-      if (isEraserKind || _hoverEraseActive || _isEraserTool) {
+      // SELECTION-CONTROL FIX: handles are grabbable by ANY tool — the pen
+      // previously never hit-tested the selection, so inserted images could
+      // not be resized/rotated with the stylus at all.
+      if (_tryBeginSelectionControl(e)) {
+        // selection grab begun.
+      } else if (isEraserKind || _hoverEraseActive || _isEraserTool) {
         _beginErase(e, stylus: true);
       } else if (_wantsInk(_tool)) {
         _beginDraw(e, stylus: true);
       } else if (_tool == Tool.lasso) {
         _beginLasso(e);
+      } else if (_tool == Tool.shape) {
+        // §8: the shape tool DRAGS a shape out (it previously fell through
+        // to pan — the tool was completely dead).
+        _beginShapeDrag(e, stylus: true);
       } else if (_tool == Tool.pan) {
         _beginPan(e);
       } else if (_tool == Tool.text) {
+        _deferredTap = _DeferredTap(e.localPosition, e.pointer);
+      } else if (_tool == Tool.textSelect) {
         _deferredTap = _DeferredTap(e.localPosition, e.pointer);
       } else if (_tool == Tool.image) {
         _deferredTap = _DeferredTap(e.localPosition, e.pointer);
@@ -221,22 +264,42 @@ class GestureRouter {
       if (activeTouches == 0) {
         // First finger.
         //
-        // The ERASER always erases with a finger — it removes ink, it never
-        // adds any, so the "draw with finger" guard must not apply to it
-        // (previously a finger with the eraser selected just panned, which
-        // users read as "the eraser is broken").
-        if (_isEraserTool) {
-          _beginErase(e, stylus: false);
-        } else if (_wantsInk(_tool) && settings.settings.drawWithFinger) {
-          _beginDraw(e, stylus: false);
-        } else if (_tool == Tool.lasso && _selectionHit(e.localPosition) != null) {
-          _beginSelGesture(e);
-        } else if (_tool == Tool.lasso) {
-          _beginLasso(e);
-        } else if (ruler != null && ruler!.active && _hitRuler(_toDoc(e.localPosition))) {
-          _beginRulerDrag(e);
-        } else {
-          _beginPan(e);
+        // SELECTION-CONTROL FIX: handles (and the selection body with the
+        // non-drawing tools) are grabbable by the finger too.
+        if (!_tryBeginSelectionControl(e)) {
+          if (_isEraserTool) {
+            // §12 (user report): the eraser obeys the SAME finger rule as
+            // the pens — a finger erases ONLY while “draw with finger” is
+            // enabled; otherwise the finger pans, exactly like the pens.
+            if (settings.settings.drawWithFinger) {
+              _beginErase(e, stylus: false);
+            } else {
+              _beginPan(e);
+            }
+          } else if (_wantsInk(_tool) && settings.settings.drawWithFinger) {
+            _beginDraw(e, stylus: false);
+          } else if (_tool == Tool.shape) {
+            // §8 shape drag: same finger rule as the pens.
+            if (settings.settings.drawWithFinger) {
+              _beginShapeDrag(e, stylus: false);
+            } else {
+              _beginPan(e);
+            }
+          } else if (_tool == Tool.lasso) {
+            _beginLasso(e);
+          } else if (ruler != null && ruler!.active && _hitRuler(_toDoc(e.localPosition))) {
+            _beginRulerDrag(e);
+          } else if (_tool == Tool.text ||
+              _tool == Tool.textSelect ||
+              _tool == Tool.image ||
+              _tool == Tool.sticker) {
+            // Tap-tools work with a FINGER too (devices without a stylus):
+            // a quick tap fires the tool; a drag beyond 18px becomes a pan
+            // (see the deferred-tap guard in onPointerMove).
+            _deferredTap = _DeferredTap(e.localPosition, e.pointer);
+          } else {
+            _beginPan(e);
+          }
         }
       } else if (activeTouches == 1) {
         // Second finger → pinch (focal stays under fingers).
@@ -257,6 +320,8 @@ class GestureRouter {
       final secondary = (e.buttons & kSecondaryMouseButton) != 0;
       if (secondary) {
         _beginPan(e);
+      } else if (_tryBeginSelectionControl(e)) {
+        // selection grab begun.
       } else if (_wantsInk(_tool) || _isEraserTool) {
         if (_isEraserTool) {
           _beginErase(e, stylus: false);
@@ -265,6 +330,8 @@ class GestureRouter {
         }
       } else if (_tool == Tool.lasso) {
         _beginLasso(e);
+      } else if (_tool == Tool.shape) {
+        _beginShapeDrag(e, stylus: true);
       } else {
         _beginPan(e);
       }
@@ -278,6 +345,13 @@ class GestureRouter {
     p.lastPos = e.localPosition;
     PenBus.I.publish(e, hover: false);
 
+    // Modal crop session swallows pointer moves.
+    if (_handleCropMove(e)) return;
+
+    if (_shapeDrag != null && _shapeDrag!.pointer == e.pointer) {
+      _extendShapeDrag(e);
+      return;
+    }
     if (_draw != null && _draw!.pointer == e.pointer) {
       _extendDraw(e);
       return;
@@ -318,8 +392,16 @@ class GestureRouter {
 
   void onPointerUp(PointerUpEvent e) {
     PenBus.I.publish(e, hover: false);
+
+    // Modal crop session swallows pointer ups.
+    if (_endCrop(e.pointer)) return;
+
     final p = _pointers.remove(e.pointer);
 
+    if (_shapeDrag != null && _shapeDrag!.pointer == e.pointer) {
+      _endShapeDrag();
+      return;
+    }
     if (_draw != null && _draw!.pointer == e.pointer) {
       _endDraw();
       return;
@@ -367,11 +449,15 @@ class GestureRouter {
   }
 
   void onPointerCancel(PointerCancelEvent e) {
+    if (_endCrop(e.pointer)) return;
     _pointers.remove(e.pointer);
     if (_draw != null && _draw!.pointer == e.pointer) _cancelDraw();
     if (_erase != null && _erase!.pointer == e.pointer) _endErase();
     if (_lasso != null && _lasso!.pointer == e.pointer) _cancelLasso();
     if (_selGesture != null && _selGesture!.pointer == e.pointer) _cancelSelGesture();
+    if (_shapeDrag != null && _shapeDrag!.pointer == e.pointer) {
+      _cancelShapeDrag();
+    }
     if (_pinch != null && (e.pointer == _pinch!.a || e.pointer == _pinch!.b)) {
       _endPinch(e.pointer);
     }
@@ -779,6 +865,230 @@ class GestureRouter {
     _selGesture = null;
   }
 
+  /// SELECTION-CONTROL routing (§5 + user report): selection handles are
+  /// grabbable by ANY tool and ANY pointer (pen, finger, mouse) — the
+  /// selection BODY moves with the non-drawing tools (lasso / pan / image /
+  /// sticker). Drawing tools keep drawing over the selection interior and
+  /// the eraser keeps erasing it; only the corner/rotate handles override
+  /// them.
+  bool _tryBeginSelectionControl(PointerDownEvent e) {
+    if (!engine.hasSelection) return false;
+    final hit = _selectionHit(e.localPosition);
+    if (hit == null) return false;
+    if (hit != SelHandle.none) {
+      _beginSelGesture(e);
+      return true;
+    }
+    switch (_tool) {
+      case Tool.lasso:
+      case Tool.pan:
+      case Tool.image:
+      case Tool.sticker:
+        _beginSelGesture(e);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  // ------------------------------------------------------------- shapes (§8)
+
+  void _beginShapeDrag(PointerDownEvent e, {required bool stylus}) {
+    final doc = _toDoc(e.localPosition);
+    final pageId = _pageIdAtDoc(doc);
+    if (pageId == null) return;
+    engine.ensureLoaded(pageId);
+    final pagePoint = _toPage(doc, pageId);
+    _shapeDrag = _ShapeDrag(e.pointer, pageId, pagePoint, stylus);
+    _updateShapePreview(pagePoint);
+  }
+
+  void _extendShapeDrag(PointerMoveEvent e) {
+    final d = _shapeDrag!;
+    final doc = _toDoc(e.localPosition);
+    final pagePoint = _toPage(doc, d.pageId);
+    if (tools.shapeType == ShapeType.freeform &&
+        (pagePoint - d.last).distance > 3) {
+      d.freePts.add(pagePoint);
+    }
+    d.last = pagePoint;
+    _updateShapePreview(pagePoint);
+  }
+
+  void _updateShapePreview(Offset current) {
+    final d = _shapeDrag!;
+    shapePreview.value = ShapeDragPreview(d.pageId, _buildShapeEl(d, current));
+  }
+
+  /// Builds the live shape element from the drag state (§8: type, color,
+  /// width, fill, polygon sides, grid snap, aspect lock).
+  ShapeEl _buildShapeEl(_ShapeDrag d, Offset current) {
+    final t = tools;
+    final type = t.shapeType;
+    final el = ShapeEl(
+      id: d.shapeId,
+      z: 0,
+      type: type,
+      strokeColor: t.shapeStrokeColor,
+      strokeWidth: t.shapeStrokeWidth,
+      fillColor: t.shapeFillColor,
+      fillOpacity: t.shapeFillOpacity,
+      sides: t.shapeSides,
+    );
+    if (type.isPolylineLike) {
+      el.pts = t.shapeGridSnap
+          ? [for (final p in [d.start, current]) _snapToGrid(p)]
+          : [d.start, current];
+    } else if (type == ShapeType.freeform) {
+      el.pts = d.freePts.isEmpty
+          ? [d.start, current]
+          : [...d.freePts, current];
+    } else {
+      var a = d.start;
+      var b = current;
+      if (t.shapeGridSnap) {
+        a = _snapToGrid(a);
+        b = _snapToGrid(b);
+      }
+      if (t.shapeAspectLock) {
+        // Square-locked: the larger extent becomes both.
+        final w = b.dx - a.dx;
+        final h = b.dy - a.dy;
+        final size = math.max(w.abs(), h.abs());
+        b = Offset(
+          a.dx + (w == 0 ? size : w.sign * size),
+          a.dy + (h == 0 ? size : h.sign * size),
+        );
+      }
+      el.x = math.min(a.dx, b.dx);
+      el.y = math.min(a.dy, b.dy);
+      el.w = math.max(2, (a.dx - b.dx).abs());
+      el.h = math.max(2, (a.dy - b.dy).abs());
+    }
+    return el;
+  }
+
+  Offset _snapToGrid(Offset p) {
+    const pitch = GRID_PITCH;
+    return Offset(
+      (p.dx / pitch).roundToDouble() * pitch,
+      (p.dy / pitch).roundToDouble() * pitch,
+    );
+  }
+
+  void _endShapeDrag() {
+    final d = _shapeDrag!;
+    _shapeDrag = null;
+    final el = shapePreview.value?.el;
+    shapePreview.value = null;
+    if (el == null) return;
+    // Discard degenerate drags (a tap, not a drag).
+    if ((d.last - d.start).distance < 4) return;
+    engine.addElement(d.pageId, el);
+  }
+
+  void _cancelShapeDrag() {
+    _shapeDrag = null;
+    shapePreview.value = null;
+  }
+
+  // ------------------------------------------------------------- crop (§5)
+
+  /// Opens the crop editor for [el] on [pageId] (called from the selection
+  /// bar). While open, the crop session is MODAL: all canvas pointers
+  /// manipulate the crop window.
+  void beginCrop(int pageId, ImageEl el) {
+    cropSession.value?.dispose();
+    cropSession.value = CropSession(pageId: pageId, el: el);
+  }
+
+  void cancelCrop() {
+    cropSession.value?.dispose();
+    cropSession.value = null;
+  }
+
+  /// Commits the crop window: maps it to a normalized source crop, keeps
+  /// the remaining content EXACTLY in place, and pushes ONE undoable
+  /// element update.
+  void commitCrop() {
+    final s = cropSession.value;
+    if (s == null) return;
+    cropSession.value = null;
+    final el = s.el;
+    final pageId = s.pageId;
+    s.dispose();
+
+    final cur = el.crop ?? const [0.0, 0.0, 1.0, 1.0];
+    double clamp01(double v) => v < 0 ? 0 : (v > 1 ? 1 : v);
+    // Window (element-local page coords) → absolute normalized crop.
+    final l = clamp01(cur[0] +
+        (s.window.left - el.x) / el.w * (cur[2] - cur[0]));
+    final t = clamp01(cur[1] +
+        (s.window.top - el.y) / el.h * (cur[3] - cur[1]));
+    final r = clamp01(cur[2] +
+        (s.window.right - el.x) / el.w * (cur[2] - cur[0]));
+    final b = clamp01(cur[3] +
+        (s.window.bottom - el.y) / el.h * (cur[3] - cur[1]));
+    if (r - l < 0.02 || b - t < 0.02) return; // degenerate → no-op
+
+    final updated = el.deepCopy();
+    updated.x = s.window.left;
+    updated.y = s.window.top;
+    updated.w = math.max(2, s.window.width);
+    updated.h = math.max(2, s.window.height);
+    updated.crop = [l, t, r, b];
+    engine.updateElement(pageId, updated);
+  }
+
+  bool _handleCropDown(PointerDownEvent e) {
+    final s = cropSession.value;
+    if (s == null) return false;
+    _pointers[e.pointer] = _Ptr(e.pointer, e.kind);
+    if (_cropPointer != -1) return true; // one manipulator at a time
+    final doc = _toDoc(e.localPosition);
+    final pagePoint = geometry.toPage(doc, s.pageId);
+    final local = s.toLocal(pagePoint);
+    final corner = s.hitCorner(local);
+    if (corner != null) {
+      _cropCorner = corner;
+      _cropPointer = e.pointer;
+      _cropLastLocal = local;
+    } else if (s.window.inflate(24).contains(local)) {
+      _cropCorner = null; // body → move the window
+      _cropPointer = e.pointer;
+      _cropLastLocal = local;
+    }
+    return true;
+  }
+
+  bool _handleCropMove(PointerMoveEvent e) {
+    final s = cropSession.value;
+    if (s == null) return false;
+    if (e.pointer != _cropPointer) return true; // swallow other pointers
+    final doc = _toDoc(e.localPosition);
+    final pagePoint = geometry.toPage(doc, s.pageId);
+    final local = s.toLocal(pagePoint);
+    if (_cropCorner != null) {
+      s.dragCorner(_cropCorner!, local);
+    } else if (_cropLastLocal != null) {
+      s.dragBy(local - _cropLastLocal!);
+    }
+    _cropLastLocal = local;
+    return true;
+  }
+
+  bool _endCrop(int pointer) {
+    final s = cropSession.value;
+    if (s == null) return false;
+    _pointers.remove(pointer);
+    if (pointer == _cropPointer) {
+      _cropPointer = -1;
+      _cropCorner = null;
+      _cropLastLocal = null;
+    }
+    return true;
+  }
+
   // ------------------------------------------------------------- ruler
 
   _RulerDrag? _rulerDrag;
@@ -896,6 +1206,8 @@ class GestureRouter {
     final pagePoint = _toPage(doc, pageId);
     if (_tool == Tool.text) {
       onTextTap?.call(pageId, pagePoint);
+    } else if (_tool == Tool.textSelect) {
+      onTextSelectTap?.call(pageId, pagePoint);
     } else if (_tool == Tool.image) {
       onPickImage?.call(pageId, pagePoint);
     } else if (_tool == Tool.sticker) {
@@ -1131,3 +1443,120 @@ class _VelSample {
 
   _VelSample(this.timeStamp, this.position);
 }
+
+/// In-progress §8 shape drag: the page it started on, the anchor point and
+/// the freehand trail (freeform only). The live element is REBUILT from the
+/// drag state on every move (see GestureRouter._buildShapeEl).
+class _ShapeDrag {
+  _ShapeDrag(this.pointer, this.pageId, this.start, this.stylus)
+      : shapeId = ElementIdGen.next(),
+        last = start,
+        freePts = [start];
+
+  final int pointer;
+  final int pageId;
+  final String shapeId;
+  final bool stylus;
+  final Offset start;
+  Offset last;
+  final List<Offset> freePts;
+}
+
+/// Live shape-drag preview (pageId + the element built so far) — painted by
+/// the workspace's doc-space overlay.
+class ShapeDragPreview {
+  ShapeDragPreview(this.pageId, this.el);
+
+  final int pageId;
+  final ShapeEl el;
+}
+
+/// §5 image-crop editor session. The crop window lives in the element's
+/// LOCAL page coordinates (before its rotation) — the workspace overlay
+/// rotates it with the image when painting, and the router inverse-rotates
+/// pointer positions when hit-testing.
+class CropSession extends ChangeNotifier {
+  CropSession({required this.pageId, required this.el})
+      : window = Rect.fromLTWH(el.x, el.y, el.w, el.h);
+
+  final int pageId;
+  final ImageEl el;
+
+  /// Current crop window (element-local page coords).
+  Rect window;
+
+  /// Inverse-rotates a page point into the element's local frame.
+  Offset toLocal(Offset pagePoint) =>
+      rotatePoint(pagePoint, el.center, -el.rotation);
+
+  static const double cornerTol = 22;
+
+  CropCorner? hitCorner(Offset local) {
+    if ((local - window.topLeft).distance <= cornerTol) {
+      return CropCorner.topLeft;
+    }
+    if ((local - window.topRight).distance <= cornerTol) {
+      return CropCorner.topRight;
+    }
+    if ((local - window.bottomLeft).distance <= cornerTol) {
+      return CropCorner.bottomLeft;
+    }
+    if ((local - window.bottomRight).distance <= cornerTol) {
+      return CropCorner.bottomRight;
+    }
+    return null;
+  }
+
+  static double _clamp(double v, double lo, double hi) =>
+      v < lo ? lo : (v > hi ? hi : v);
+
+  /// Corner drag: the opposite edges stay anchored; the window keeps a
+  /// minimum size of 8 page units.
+  void dragCorner(CropCorner c, Offset local) {
+    var l = window.left;
+    var t = window.top;
+    var r = window.right;
+    var b = window.bottom;
+    switch (c) {
+      case CropCorner.topLeft:
+        l = _clamp(local.dx, el.x, math.max(el.x, r - 8));
+        t = _clamp(local.dy, el.y, math.max(el.y, b - 8));
+      case CropCorner.topRight:
+        r = _clamp(local.dx, math.min(l + 8, el.x + el.w), el.x + el.w);
+        t = _clamp(local.dy, el.y, math.max(el.y, b - 8));
+      case CropCorner.bottomLeft:
+        l = _clamp(local.dx, el.x, math.max(el.x, r - 8));
+        b = _clamp(local.dy, math.min(t + 8, el.y + el.h), el.y + el.h);
+      case CropCorner.bottomRight:
+        r = _clamp(local.dx, math.min(l + 8, el.x + el.w), el.x + el.w);
+        b = _clamp(local.dy, math.min(t + 8, el.y + el.h), el.y + el.h);
+    }
+    window = Rect.fromLTRB(l, t, r, b);
+    notifyListeners();
+  }
+
+  /// Body drag: move the window, clamped inside the element rect.
+  void dragBy(Offset deltaLocal) {
+    final nx = _clamp(
+      window.left + deltaLocal.dx,
+      el.x,
+      math.max(el.x, el.x + el.w - window.width),
+    );
+    final ny = _clamp(
+      window.top + deltaLocal.dy,
+      el.y,
+      math.max(el.y, el.y + el.h - window.height),
+    );
+    window = Rect.fromLTWH(nx, ny, window.width, window.height);
+    notifyListeners();
+  }
+
+  /// Expands the window back to the whole visible image.
+  void reset() {
+    window = Rect.fromLTWH(el.x, el.y, el.w, el.h);
+    notifyListeners();
+  }
+}
+
+enum CropCorner { topLeft, topRight, bottomLeft, bottomRight }
+

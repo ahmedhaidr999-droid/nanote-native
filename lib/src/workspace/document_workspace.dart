@@ -15,12 +15,12 @@ import '../controllers/viewport_controller.dart';
 import '../i18n/strings.dart';
 import '../models/page_elements.dart';
 import '../models/paper.dart';
+import '../models/tool.dart';
 import '../persistence/file_store.dart';
 import '../services/export_service.dart';
 import '../services/image_cache.dart';
 import '../theme/nanote_theme.dart';
 import '../ui/panels/audio_panel.dart' show showAudioPanel;
-import '../ui/panels/color_popover.dart' show showColorPopover;
 import '../ui/panels/pages_sheet.dart' show showPagesSheet;
 import '../ui/panels/sticker_picker.dart' show showStickerPicker;
 import '../ui/panels/text_sheet.dart' show showTextSheet;
@@ -30,6 +30,7 @@ import 'elements_painter.dart';
 import 'gesture_router.dart';
 import 'ink_painter.dart';
 import 'laser_overlay.dart';
+import 'paper_painter.dart';
 import 'pdf_page_tile.dart';
 import 'ruler_overlay.dart';
 import 'tool_rail.dart';
@@ -62,15 +63,8 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
   bool _railHidden = false;
   bool _didInitialFit = false;
 
-  /// Floating tool-rail dock (draggable capsule). Phones default to the
-  /// start/end edge; tablets/landscape to the bottom. The user's drag
-  /// overrides the default for this session.
-  RailDock _railDock = RailDock.start;
-  bool _dockInitialized = false;
-  bool _dockUserSet = false;
-
   /// After the initial fit, re-fit once when the first PDF page aspect lands
-  /// (PDF notebooks start with a paper-size guess that gets corrected).
+  // (PDF notebooks start with a paper-size guess that gets corrected).
   bool _refitOnAspect = false;
   Size _screenSize = Size.zero;
   final Set<int> _loadRequested = {};
@@ -95,6 +89,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
       onToggleToolbar: () => setState(() => _railHidden = !_railHidden),
       onQuickExport: _quickExport,
       onTextTap: _onTextTap,
+      onTextSelectTap: _onTextSelectTap,
       onPickImage: _onPickImage,
       onPickSticker: _onPickSticker,
       onPageChanged: _jumpToPage,
@@ -410,8 +405,13 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
       );
       final engine = StrokeEngine.I;
       engine.addElement(pageId, el);
-      // Select it (contract: insert + select).
+      // Select it (contract: insert + select) and hand over to the LASSO
+      // (§9: insert → auto-select → lasso) so the user can immediately
+      // move/resize the image with pen OR finger — the image tool's next
+      // tap inserts another image.
       engine.selectElements(pageId, [el.id]);
+      ToolController.I.tool = Tool.lasso;
+      ToolController.I.closeSettings();
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -423,6 +423,18 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
 
   void _onPickSticker(int pageId, Offset pagePoint) {
     unawaited(showStickerPicker(context, StrokeEngine.I, pageId, pagePoint));
+  }
+
+  /// §7 text-select tool: tapping a text element opens the translation
+  /// popup directly (no lasso needed). Tapping empty space does nothing.
+  void _onTextSelectTap(int pageId, Offset pagePoint) {
+    final engine = StrokeEngine.I;
+    final el = engine.elementAt(pageId, pagePoint);
+    if (el is TextEl && el.text.trim().isNotEmpty) {
+      // Visually select it so the user sees WHAT is being translated.
+      engine.selectElements(pageId, [el.id]);
+      unawaited(showTranslatePopup(context, el.text));
+    }
   }
 
   void _pasteHere() {
@@ -449,50 +461,35 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     );
   }
 
-  /// Editor body: the canvas fills the screen; the tool rail floats above
-  /// it as a draggable capsule (bottom-center horizontal by default, or a
-  /// vertical capsule on the logical start/end edge — phones default to the
-  /// edge, tablets/landscape to the bottom).
+  /// Editor body: the canvas fills the screen; the FIXED tool rail floats
+  /// above it. Position comes from settings.railPosition ONLY (never
+  /// dragged): start/end → vertical capsule centered on that edge;
+  /// top/bottom → horizontal capsule. leftHanded mirrors the vertical
+  /// side (§0).
   Widget _buildEditorBody(BuildContext context, StrokeEngine engine) {
-    final leftHanded = SettingsController.I.settings.leftHanded;
-    // First layout decides the default dock from the available width.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_dockInitialized && _screenSize != Size.zero) {
-        _dockInitialized = true;
-        if (!_dockUserSet) {
-          setState(() {
-            _railDock = _screenSize.width < 600
-                ? (leftHanded ? RailDock.end : RailDock.start)
-                : RailDock.bottom;
-          });
-        }
-      }
-    });
+    final settings = SettingsController.I.settings;
+    final dock = resolveRailDock(settings.railPosition, settings.leftHanded);
     final rail = ToolRail(
       tools: ToolController.I,
       engine: engine,
       ruler: ruler,
-      dock: _railDock,
+      dock: dock,
       hidden: _railHidden,
-      onDockChange: (d) => setState(() {
-        _railDock = d;
-        _dockUserSet = true;
-      }),
-      onColorTap: () =>
-          unawaited(showColorPopover(context, ToolController.I)),
-      onUndo: engine.undo,
-      onRedo: engine.redo,
+      onCollapse: () => setState(() => _railHidden = true),
+      onToggleFinger: _onToggleFingerDraw,
+      onMicTap: () => unawaited(showAudioPanel(context, engine)),
     );
     return Stack(
       fit: StackFit.expand,
       children: [
         // The canvas (full-bleed; the rail floats above it).
         Positioned.fill(child: _buildCanvasArea(context)),
-        // The floating rail, docked.
+        // The fixed rail, docked per settings.
         _railHidden
-            ? const SizedBox.shrink()
+            ? _railReturnHandle(context, dock)
             : Align(
-                alignment: switch (_railDock) {
+                alignment: switch (dock) {
+                  RailDock.top => Alignment.topCenter,
                   RailDock.bottom => Alignment.bottomCenter,
                   RailDock.start => AlignmentDirectional.centerStart,
                   RailDock.end => AlignmentDirectional.centerEnd,
@@ -503,6 +500,63 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
                 ),
               ),
       ],
+    );
+  }
+
+  /// §12 finger-drawing toggle with the required toast feedback.
+  void _onToggleFingerDraw(bool v) {
+    SettingsController.I.setDrawWithFinger(v);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          content: Text(S.t(v ? 'fingerWriteOn' : 'fingerWriteOff')),
+        ),
+      );
+  }
+
+  /// §0: while the rail is folded, a floating rounded 10×14px pill handle
+  /// sits on the same docked edge — one tap brings the rail back.
+  Widget _railReturnHandle(BuildContext context, RailDock dock) {
+    final scheme = Theme.of(context).colorScheme;
+    final colors = nanoteColors(context);
+    final vertical = dock.isVertical;
+    // Visible pill: 10×14 on a vertical edge, 14×10 on a horizontal one
+    // (§0). Wrapped in a 44×44 invisible tap target.
+    final handle = Tooltip(
+      message: S.t('showToolbar'),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => setState(() => _railHidden = false),
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Center(
+            child: Container(
+              width: vertical ? 10 : 14,
+              height: vertical ? 14 : 10,
+              decoration: BoxDecoration(
+                color: scheme.primary,
+                borderRadius: BorderRadius.circular(999),
+                boxShadow: colors.inkShadow2,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    return Align(
+      alignment: switch (dock) {
+        RailDock.top => Alignment.topCenter,
+        RailDock.bottom => Alignment.bottomCenter,
+        RailDock.start => AlignmentDirectional.centerStart,
+        RailDock.end => AlignmentDirectional.centerEnd,
+      },
+      child: SafeArea(
+        minimum: const EdgeInsets.all(10),
+        child: handle,
+      ),
     );
   }
 
@@ -523,27 +577,26 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
         overflow: TextOverflow.ellipsis,
       ),
       actions: [
-        // Spec top bar: back • title • undo/redo • export. Undo/redo stay in
-        // the floating rail everywhere; the header repeats them on wide
-        // screens only (phones would overflow).
-        if (MediaQuery.sizeOf(context).width >= 600)
-          ListenableBuilder(
-            listenable: engine.historyChanged,
-            builder: (context, _) => Row(
-              children: [
-                IconButton(
-                  icon: const Icon(LucideIcons.undo, size: 20),
-                  tooltip: S.t('undo'),
-                  onPressed: engine.canUndo ? engine.undo : null,
-                ),
-                IconButton(
-                  icon: const Icon(LucideIcons.redo, size: 20),
-                  tooltip: S.t('redo'),
-                  onPressed: engine.canRedo ? engine.redo : null,
-                ),
-              ],
-            ),
+        // Spec top bar: back • title • undo/redo • export. Undo/redo LIVE
+        // in the header on every screen size (the §0 rail no longer carries
+        // them — its 14 slots are the fixed tool/toggle set).
+        ListenableBuilder(
+          listenable: engine.historyChanged,
+          builder: (context, _) => Row(
+            children: [
+              IconButton(
+                icon: const Icon(LucideIcons.undo, size: 20),
+                tooltip: S.t('undo'),
+                onPressed: engine.canUndo ? engine.undo : null,
+              ),
+              IconButton(
+                icon: const Icon(LucideIcons.redo, size: 20),
+                tooltip: S.t('redo'),
+                onPressed: engine.canRedo ? engine.redo : null,
+              ),
+            ],
           ),
+        ),
         AnimatedBuilder(
           animation: viewport,
           builder: (context, _) => TextButton(
@@ -654,12 +707,20 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
                             child: RulerOverlay(ruler: ruler, viewport: viewport),
                           ),
                           KeyedSubtree(
+                            key: const ValueKey('overlay-shape-preview'),
+                            child: _buildShapePreviewOverlay(context),
+                          ),
+                          KeyedSubtree(
                             key: const ValueKey('overlay-lasso'),
                             child: _buildLassoOverlay(context),
                           ),
                           KeyedSubtree(
                             key: const ValueKey('overlay-selection'),
                             child: _buildSelectionHandles(context),
+                          ),
+                          KeyedSubtree(
+                            key: const ValueKey('overlay-crop'),
+                            child: _buildCropOverlay(context),
                           ),
                         ],
                       ),
@@ -676,18 +737,25 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
             _buildToolSettingsPanel(context),
             AnimatedBuilder(
               animation: viewport,
-              builder: (context, _) => _buildSelectionBar(context),
+              builder: (context, _) => ValueListenableBuilder<CropSession?>(
+                valueListenable: router.cropSession,
+                builder: (context, crop, _) => crop == null
+                    ? _buildSelectionBar(context)
+                    : const SizedBox.shrink(),
+              ),
             ),
+            _buildCropBar(context),
           ],
         );
       },
     );
   }
 
-  /// Floating tool-settings panel, anchored relative to the rail dock:
-  /// horizontal (bottom) rail → panel floats ABOVE the rail, centered;
-  /// vertical (side) rail → panel hugs the same edge, under the app bar.
-  /// Tap a rail tool → select + open; tap the ACTIVE tool again → close.
+  /// Floating tool-settings panel, CLAMPED to the screen (§0): the panel
+  /// never overflows the viewport — its width/height adapt via a
+  /// LayoutBuilder, it scrolls internally and stays beside/away from the
+  /// docked rail. Tap a rail tool → select + open; tap the ACTIVE tool
+  /// again → close.
   Widget _buildToolSettingsPanel(BuildContext context) {
     return ListenableBuilder(
       listenable: Listenable.merge([ToolController.I, SettingsController.I]),
@@ -695,31 +763,70 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
         if (_railHidden || !ToolController.I.settingsOpen) {
           return const SizedBox.shrink();
         }
-        final AlignmentGeometry alignment;
-        final EdgeInsets padding;
-        switch (_railDock) {
-          case RailDock.bottom:
-            alignment = Alignment.bottomCenter;
-            padding = const EdgeInsets.only(bottom: 96);
-          case RailDock.start:
-            alignment = AlignmentDirectional.topStart;
-            padding = const EdgeInsets.all(10);
-          case RailDock.end:
-            alignment = AlignmentDirectional.topEnd;
-            padding = const EdgeInsets.all(10);
-        }
-        return AnimatedSwitcher(
-          duration: const Duration(milliseconds: 160),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          child: Align(
-            key: ValueKey('panel-${ToolController.I.tool.name}'),
-            alignment: alignment,
-            child: Padding(
-              padding: padding,
-              child: ToolSettingsPanel(tools: ToolController.I),
-            ),
-          ),
+        final settings = SettingsController.I.settings;
+        final dock =
+            resolveRailDock(settings.railPosition, settings.leftHanded);
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final screen = constraints.biggest;
+            // Reserve the rail's footprint on its edge (vertical rail is
+            // 56px wide + 10px margin; horizontal is 56px tall + 10px).
+            final double availW;
+            final double availH;
+            final EdgeInsetsGeometry padding;
+            final AlignmentGeometry alignment;
+            switch (dock) {
+              case RailDock.top:
+                availW = screen.width - 24;
+                availH = screen.height - 80; // app-bar-less body: top rail + pad
+                alignment = Alignment.topCenter;
+                padding = const EdgeInsets.only(top: 72);
+              case RailDock.bottom:
+                availW = screen.width - 24;
+                availH = screen.height - 80;
+                alignment = Alignment.bottomCenter;
+                padding = const EdgeInsets.only(bottom: 76);
+              case RailDock.start:
+                availW = screen.width - 24 - 66; // rail column + margins
+                availH = screen.height - 24;
+                alignment = AlignmentDirectional.topStart;
+                padding = const EdgeInsetsDirectional.fromSTEB(66, 12, 12, 12);
+              case RailDock.end:
+                availW = screen.width - 24 - 66;
+                availH = screen.height - 24;
+                alignment = AlignmentDirectional.topEnd;
+                padding = const EdgeInsetsDirectional.fromSTEB(12, 12, 66, 12);
+            }
+            return AnimatedSwitcher(
+              duration: const Duration(milliseconds: 160),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              child: Align(
+                key: ValueKey('panel-${ToolController.I.tool.name}'),
+                alignment: alignment,
+                child: Padding(
+                  padding: padding,
+                  child: ToolSettingsPanel(
+                    tools: ToolController.I,
+                    maxWidth: availW.clamp(180.0, 300.0),
+                    maxHeight: availH.clamp(160.0, 520.0),
+                    onClearPage: () {
+                      final meta = _currentMeta;
+                      if (meta == null) return;
+                      StrokeEngine.I.clearPage(meta.id);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context)
+                          ..hideCurrentSnackBar()
+                          ..showSnackBar(SnackBar(
+                            content: Text(S.t('pageCleared')),
+                          ));
+                      }
+                    },
+                  ),
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -739,6 +846,26 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
       rect: rect,
       child: Stack(
         children: [
+          // PDF ROOT-CAUSE FIX (pages showed blank while the thumbnails
+          // rendered fine): a Flutter Stack paints LATER children ON TOP,
+          // and the old order (PDF tile FIRST, then the content painter
+          // with an OPAQUE paper fill) buried the rendered PDF under the
+          // paper. The correct layering — the very one the thumbnails use:
+          //   1. opaque paper fill (bottom): a pending/failed render still
+          //      looks like white paper, never a dark void;
+          //   2. the PDF tile: covers the fill once its render lands;
+          //   3. template lines + ink + elements (top) with the paper fill
+          //      SKIPPED (paintPaper: false) so the PDF shows through.
+          if (pdfOpen)
+            CustomPaint(
+              size: rect.size,
+              painter: PaperPainter(
+                template: TemplateId.blank,
+                paperColor: paperColorFrom(meta.paperColor),
+                size: rect.size,
+                paintBackground: true,
+              ),
+            ),
           if (pdfOpen)
             PdfPageTile(
               pdf: pdf,
@@ -755,10 +882,9 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
               pageSize: rect.size,
               ink: ink,
               replayAt: _replayAt(),
-              // ALWAYS paint the paper under the PDF tile: the tile covers
-              // it once rendered, but a pending/failed render must NEVER
-              // leave a dark void where a page should be.
-              paintPaper: true,
+              // Paper fill only for NON-PDF pages — the dedicated fill
+              // under the tile already covers the pending-render void.
+              paintPaper: !pdfOpen,
             ),
           ),
           if (meta.id == _currentPageId)
@@ -795,6 +921,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
             painter: _LassoPainter(
               points: pts,
               color: Theme.of(context).colorScheme.primary,
+              pad: StrokeEngine.I.padOffsetOf(pageId),
             ),
           ),
         );
@@ -849,31 +976,42 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
       valueListenable: engine.eraserCursor,
       builder: (context, cur, _) {
         if (cur == null) return const SizedBox.shrink();
-        // Crisp, clearly-visible erase indicator: primary ring + faint
-        // primary fill + an eraser glyph (never a gray film).
-        return Positioned(
-          left: cur.screenPos.dx - cur.radius,
-          top: cur.screenPos.dy - cur.radius,
-          child: Container(
-            width: cur.radius * 2,
-            height: cur.radius * 2,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: scheme.primary.withValues(alpha: 0.10),
-              border: Border.all(
-                color: scheme.primary.withValues(alpha: 0.85),
-                width: 1.6,
+        // ERASER-CURSOR FIX (the REAL flicker root cause): the old code
+        // returned a `Positioned` nested inside IgnorePointer — a
+        // ParentDataWidget under a RenderObjectWidget parent, so the
+        // position was NEVER applied: the pale circle rendered stuck at
+        // the top-start corner, appearing/vanishing with every tap =
+        // "pale screen flash". Rebuilt with Align + Transform.translate
+        // (depth-safe) AND as a thin ring only (no large translucent
+        // fill), isolated in a RepaintBoundary.
+        return Align(
+          alignment: AlignmentDirectional.topStart,
+          widthFactor: 1,
+          heightFactor: 1,
+          child: Transform.translate(
+            offset: cur.screenPos - Offset(cur.radius, cur.radius),
+            child: RepaintBoundary(
+              child: Container(
+                width: cur.radius * 2,
+                height: cur.radius * 2,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: scheme.primary.withValues(alpha: 0.85),
+                    width: 1.6,
+                  ),
+                ),
+                child: cur.radius >= 18
+                    ? Center(
+                        child: Icon(
+                          LucideIcons.eraser,
+                          size: math.min(cur.radius * 0.7, 18),
+                          color: scheme.primary.withValues(alpha: 0.75),
+                        ),
+                      )
+                    : null,
               ),
             ),
-            child: cur.radius >= 18
-                ? Center(
-                    child: Icon(
-                      LucideIcons.eraser,
-                      size: math.min(cur.radius * 0.9, 22),
-                      color: scheme.primary.withValues(alpha: 0.9),
-                    ),
-                  )
-                : null,
           ),
         );
       },
@@ -941,6 +1079,31 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
                           unawaited(showTranslatePopup(context, el.text));
                         }
                       }),
+                    // §5 image actions (single selected user image): rotate,
+                    // flip, crop — previously only stroke-agnostic buttons
+                    // existed and NOTHING could transform an image.
+                    if (_selectedImageElement(engine, pageId) != null) ...[
+                      _barBtn(LucideIcons.rotate_ccw, 'rotateLeft', () {
+                        final el = _selectedImageElement(engine, pageId);
+                        if (el != null) _rotateImage(el, pageId, -1);
+                      }),
+                      _barBtn(LucideIcons.rotate_cw, 'rotateRight', () {
+                        final el = _selectedImageElement(engine, pageId);
+                        if (el != null) _rotateImage(el, pageId, 1);
+                      }),
+                      _barBtn(LucideIcons.arrow_left_right, 'flipH', () {
+                        final el = _selectedImageElement(engine, pageId);
+                        if (el != null) _flipImage(el, pageId, true);
+                      }),
+                      _barBtn(LucideIcons.arrow_up_down, 'flipV', () {
+                        final el = _selectedImageElement(engine, pageId);
+                        if (el != null) _flipImage(el, pageId, false);
+                      }),
+                      _barBtn(LucideIcons.crop, 'crop', () {
+                        final el = _selectedImageElement(engine, pageId);
+                        if (el != null) router.beginCrop(pageId, el);
+                      }),
+                    ],
                   ],
                 ),
               ),
@@ -961,6 +1124,149 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
       }
     }
     return null;
+  }
+
+  /// The single selected user IMAGE (drives the §5 image actions).
+  ImageEl? _selectedImageElement(StrokeEngine engine, int pageId) {
+    if (engine.selectedElementIds.length != 1 ||
+        engine.selectedStrokeIds.isNotEmpty) {
+      return null;
+    }
+    final ink = engine.pageInkOrNull(pageId);
+    if (ink == null) return null;
+    for (final el in ink.elements) {
+      if (el is ImageEl &&
+          engine.selectedElementIds.contains(el.id) &&
+          el.src != null) {
+        return el;
+      }
+    }
+    return null;
+  }
+
+  /// Rotates the image by [quarterTurns] × 90° around its center (undoable).
+  void _rotateImage(ImageEl el, int pageId, int quarterTurns) {
+    final updated = el.deepCopy();
+    final c = updated.center;
+    updated.rotation += quarterTurns * math.pi / 2;
+    // Keep the visual center: swap w/h with the new rotation.
+    updated.x = c.dx - updated.h / 2;
+    updated.y = c.dy - updated.w / 2;
+    final w = updated.w;
+    updated.w = updated.h;
+    updated.h = w;
+    StrokeEngine.I.updateElement(pageId, updated);
+  }
+
+  /// Mirrors the image horizontally / vertically (undoable).
+  void _flipImage(ImageEl el, int pageId, bool horizontal) {
+    final updated = el.deepCopy();
+    if (horizontal) {
+      updated.flipH = !updated.flipH;
+    } else {
+      updated.flipV = !updated.flipV;
+    }
+    StrokeEngine.I.updateElement(pageId, updated);
+  }
+
+  /// Live §8 shape-drag preview: paints the element being dragged out on
+  /// its page (page-local coords).
+  Widget _buildShapePreviewOverlay(BuildContext context) {
+    return ValueListenableBuilder<ShapeDragPreview?>(
+      valueListenable: router.shapePreview,
+      builder: (context, pv, _) {
+        if (pv == null) return const SizedBox.shrink();
+        final idx = StrokeEngine.I.pages.indexWhere((p) => p.id == pv.pageId);
+        if (idx < 0) return const SizedBox.shrink();
+        final rect = geometry.pageRect(idx);
+        return Positioned.fromRect(
+          rect: rect,
+          child: CustomPaint(
+            size: rect.size,
+            painter: _ShapePreviewPainter(preview: pv),
+          ),
+        );
+      },
+    );
+  }
+
+  /// §5 crop editor overlay: dims everything outside the crop window,
+  /// draws the window (rotated with the image) + rule-of-thirds + corner
+  /// handles.
+  Widget _buildCropOverlay(BuildContext context) {
+    return ValueListenableBuilder<CropSession?>(
+      valueListenable: router.cropSession,
+      builder: (context, s, _) {
+        if (s == null) return const SizedBox.shrink();
+        final idx = StrokeEngine.I.pages.indexWhere((p) => p.id == s.pageId);
+        if (idx < 0) return const SizedBox.shrink();
+        final rect = geometry.pageRect(idx);
+        return Positioned.fromRect(
+          rect: rect,
+          child: CustomPaint(
+            size: rect.size,
+            painter: _CropOverlayPainter(
+              session: s,
+              primary: Theme.of(context).colorScheme.primary,
+              pad: StrokeEngine.I.padOffsetOf(s.pageId),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// §5 crop action bar (screen space, bottom-center): cancel / reset /
+  /// confirm. Modal — the canvas router feeds the crop session while open.
+  Widget _buildCropBar(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final colors = nanoteColors(context);
+    return ValueListenableBuilder<CropSession?>(
+      valueListenable: router.cropSession,
+      builder: (context, s, _) {
+        if (s == null) return const SizedBox.shrink();
+        return Positioned(
+          left: 0,
+          right: 0,
+          bottom: 24,
+          child: Center(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: scheme.outline),
+                boxShadow: colors.inkShadow2,
+              ),
+              child: Material(
+                elevation: 0,
+                borderRadius: BorderRadius.circular(999),
+                color: scheme.surface,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(LucideIcons.x, size: 20),
+                      tooltip: S.t('cancel'),
+                      onPressed: router.cancelCrop,
+                    ),
+                    IconButton(
+                      icon: const Icon(LucideIcons.maximize, size: 20),
+                      tooltip: S.t('reset'),
+                      onPressed: s.reset,
+                    ),
+                    IconButton(
+                      icon: Icon(LucideIcons.check,
+                          size: 20, color: scheme.primary),
+                      tooltip: S.t('confirm'),
+                      onPressed: router.commitCrop,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Widget _barBtn(IconData icon, String label, VoidCallback? onTap) {
@@ -992,6 +1298,9 @@ class _SelectionHandlesPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final box = engine.selectionBBox();
     if (box == null) return;
+    // §2 selection bounds are page-local — translate onto the grown paper.
+    final pad = StrokeEngine.I.padOffsetOf(engine.selectionPageId ?? -1);
+    canvas.translate(pad.dx, pad.dy);
     final edge = Paint()
       ..color = primary
       ..strokeWidth = 1.5
@@ -1038,14 +1347,18 @@ class _SelectionHandlesPainter extends CustomPainter {
 
 /// Lasso polyline preview (page space).
 class _LassoPainter extends CustomPainter {
-  _LassoPainter({required this.points, required this.color});
+  _LassoPainter({required this.points, required this.color, this.pad = Offset.zero});
 
   final List<Offset> points;
   final Color color;
 
+  /// §2 pad offset of the owning page (page-local points may be negative).
+  final Offset pad;
+
   @override
   void paint(Canvas canvas, Size size) {
     if (points.length < 2) return;
+    canvas.translate(pad.dx, pad.dy);
     final path = Path()..moveTo(points.first.dx, points.first.dy);
     for (var i = 1; i < points.length; i++) {
       path.lineTo(points[i].dx, points[i].dy);
@@ -1066,3 +1379,95 @@ class _LassoPainter extends CustomPainter {
     return oldDelegate.points != points;
   }
 }
+
+/// Live §8 shape being dragged out (page space) — painted through the
+/// shared element painter so the preview matches the committed look.
+class _ShapePreviewPainter extends CustomPainter {
+  _ShapePreviewPainter({required this.preview, this.pad = Offset.zero});
+
+  final ShapeDragPreview preview;
+
+  /// §2 pad offset of the owning page.
+  final Offset pad;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.translate(pad.dx, pad.dy);
+    ElementsPainter.paintElement(canvas, preview.el);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ShapePreviewPainter oldDelegate) => true;
+}
+
+/// §5 crop editor: dim outside the window, window border + rule-of-thirds
+/// + corner handles — all rotated with the image (page space).
+class _CropOverlayPainter extends CustomPainter {
+  _CropOverlayPainter({
+    required this.session,
+    required this.primary,
+    this.pad = Offset.zero,
+  });
+
+  final CropSession session;
+  final Color primary;
+
+  /// §2 pad offset of the owning page.
+  final Offset pad;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final el = session.el;
+    final w = session.window;
+
+    canvas.save();
+    // Rotate into the element's frame so the window follows the image.
+    final c = el.center;
+    canvas.translate(c.dx, c.dy);
+    canvas.rotate(el.rotation);
+    canvas.translate(-c.dx, -c.dy);
+
+    // Dim everything outside the crop window (even-odd fill).
+    final dimPath = Path()
+      ..addRect(Offset.zero & size)
+      ..addRect(w)
+      ..fillType = PathFillType.evenOdd;
+    canvas.drawPath(dimPath, Paint()..color = const Color(0x8A0F172A));
+
+    // Window border.
+    canvas.drawRect(
+      w,
+      Paint()
+        ..color = primary
+        ..strokeWidth = 1.5
+        ..style = PaintingStyle.stroke,
+    );
+
+    // Rule-of-thirds guides.
+    final third = Paint()
+      ..color = primary.withValues(alpha: 0.55)
+      ..strokeWidth = 1;
+    for (var i = 1; i < 3; i++) {
+      final x = w.left + w.width * i / 3;
+      canvas.drawLine(Offset(x, w.top), Offset(x, w.bottom), third);
+      final y = w.top + w.height * i / 3;
+      canvas.drawLine(Offset(w.left, y), Offset(w.right, y), third);
+    }
+
+    // Corner handles.
+    final fill = Paint()..color = const Color(0xFFFFFFFF);
+    final ring = Paint()
+      ..color = primary
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    for (final p in [w.topLeft, w.topRight, w.bottomRight, w.bottomLeft]) {
+      canvas.drawCircle(p, 9, fill);
+      canvas.drawCircle(p, 9, ring);
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _CropOverlayPainter oldDelegate) => true;
+}
+

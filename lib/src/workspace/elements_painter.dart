@@ -247,12 +247,20 @@ class PageContentPainter extends CustomPainter {
       canvas.scale(scaleForThumb, scaleForThumb);
     }
 
+    // §6: the template grid is ANCHOR-aligned (never shifts while the
+    // infinite paper grows); §2: ink + elements are anchor-relative too —
+    // translate by the page's pad offset onto the grown paper widget.
+    final pad = ink.padOffset;
     PaperPainter(
       template: template,
       paperColor: paperColor,
       size: pageSize,
       paintBackground: paintPaper,
+      patternOrigin: pad,
     ).paint(canvas, pageSize);
+
+    canvas.save();
+    canvas.translate(pad.dx, pad.dy);
 
     // Interleaved z order (two-pointer merge of two z-sorted lists).
     final strokes = ink.strokes;
@@ -280,6 +288,8 @@ class PageContentPainter extends CustomPainter {
     InkPainter.paintHighlighterGroups(canvas, highlighters);
 
     _paintSelectionTint(canvas);
+
+    canvas.restore(); // pad offset (§2)
 
     if (scaleForThumb != 1.0) {
       canvas.restore();

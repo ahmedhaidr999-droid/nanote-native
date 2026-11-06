@@ -58,6 +58,10 @@ class AppSettings {
   String numerals; // latin (default) | hindi (٠١٢٣)
   bool leftHanded;
 
+  /// §0 Tool-rail dock: 'start' | 'end' | 'top' | 'bottom'. The rail is
+  /// FIXED (never dragged); leftHanded mirrors the vertical sides.
+  String railPosition;
+
   // Writing
   double pressureCurve; // gamma 0.4..2.5
   bool drawWithFinger;
@@ -93,6 +97,7 @@ class AppSettings {
     this.lang = 'en',
     this.numerals = 'latin',
     this.leftHanded = false,
+    this.railPosition = 'end',
     this.pressureCurve = 1.0,
     this.drawWithFinger = false,
     this.shapeDetection = true,
@@ -150,6 +155,7 @@ class AppSettings {
         'lang': lang,
         'numerals': numerals,
         'leftHanded': leftHanded,
+        'railPosition': railPosition,
         'pressureCurve': pressureCurve,
         'drawWithFinger': drawWithFinger,
         'shapeDetection': shapeDetection,
@@ -174,6 +180,7 @@ class AppSettings {
         lang: (j['lang'] as String?) ?? 'en',
         numerals: (j['numerals'] as String?) ?? 'latin',
         leftHanded: j['leftHanded'] as bool? ?? false,
+        railPosition: (j['railPosition'] as String?) ?? 'end',
         pressureCurve: (j['pressureCurve'] as num?)?.toDouble() ?? 1.0,
         drawWithFinger: j['drawWithFinger'] as bool? ?? false,
         shapeDetection: j['shapeDetection'] as bool? ?? true,

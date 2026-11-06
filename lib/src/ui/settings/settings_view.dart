@@ -179,6 +179,23 @@ class _SettingsViewState extends State<SettingsView> {
                     onChanged: (v) =>
                         SettingsController.I.setLeftHanded(v),
                   ),
+                  _divider(),
+                  _controlRow(
+                    context,
+                    label: S.t('railPosition'),
+                    child: _segmented<String>(
+                      context,
+                      options: [
+                        _SegOption('start', S.t('railStart')),
+                        _SegOption('end', S.t('railEnd')),
+                        _SegOption('top', S.t('railTop')),
+                        _SegOption('bottom', S.t('railBottom')),
+                      ],
+                      selected: s.railPosition,
+                      onChanged: (v) =>
+                          SettingsController.I.setRailPosition(v),
+                    ),
+                  ),
                 ],
               ),
 

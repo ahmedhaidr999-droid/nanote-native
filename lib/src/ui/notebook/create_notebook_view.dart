@@ -64,6 +64,9 @@ class _CreateNotebookViewState extends State<CreateNotebookView> {
   String get _family =>
       _pageSize.name.replaceFirst(RegExp('(Portrait|Landscape)\$'), '');
 
+  /// §1 the fourth paper kind: the INFINITE paper.
+  bool get _isInfinite => _pageSize == PageSizeId.infinityPaper;
+
   bool get _portrait => _pageSize.name.endsWith('Portrait');
 
   void _setSize(String family, bool portrait) => setState(
@@ -326,12 +329,17 @@ class _CreateNotebookViewState extends State<CreateNotebookView> {
           children: [
             for (final family in _families) ...[
               Expanded(child: _familyCard(context, family)),
-              if (family != _families.last) const SizedBox(width: 8),
+              const SizedBox(width: 8),
             ],
+            Expanded(child: _infinityCard(context)),
           ],
         ),
         const SizedBox(height: 12),
-        _orientationToggle(context),
+        // §1 infinite paper has no orientation — show its hint instead.
+        if (_isInfinite)
+          _infinityHint(context)
+        else
+          _orientationToggle(context),
       ]),
       _section(context, S.t('paperColor'), [
         Wrap(
@@ -529,6 +537,97 @@ class _CreateNotebookViewState extends State<CreateNotebookView> {
   }
 
   // ---------------------------------------------------------- page size
+
+  /// §1 The INFINITE paper card: «794 × ∞» with the continuous-scroll
+  /// hint when selected.
+  Widget _infinityCard(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final nc = nanoteColors(context);
+    final selected = _isInfinite;
+    return Pressable(
+      onTap: () => setState(() => _pageSize = PageSizeId.infinityPaper),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? nc.accent : Colors.transparent,
+          borderRadius: BorderRadius.circular(NANOTE_RADIUS),
+          border: Border.all(
+            color: selected ? cs.primary : cs.outline,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  LucideIcons.infinity,
+                  size: 16,
+                  color: selected ? nc.accentFg : cs.primary,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    S.t('size.infinity'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: nanoteText(TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: selected ? nc.accentFg : cs.onSurface,
+                    )),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${S.num(794)} × ∞',
+              style: nanoteText(TextStyle(
+                fontSize: 11,
+                color: selected
+                    ? nc.accentFg.withValues(alpha: 0.8)
+                    : nc.mutedFg,
+              )),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// §1 the hint shown while the infinite paper is selected.
+  Widget _infinityHint(BuildContext context) {
+    final nc = nanoteColors(context);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: nc.surfaceVariant,
+        borderRadius: BorderRadius.circular(NANOTE_RADIUS_MD),
+      ),
+      child: Row(
+        children: [
+          Icon(LucideIcons.infinity, size: 14, color: nc.mutedFg),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              S.t('size.infinityHint'),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: nanoteText(TextStyle(
+                fontSize: 11.5,
+                height: 1.4,
+                color: nc.mutedFg,
+              )),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _familyCard(BuildContext context, String family) {
     final cs = Theme.of(context).colorScheme;

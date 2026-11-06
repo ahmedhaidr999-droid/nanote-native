@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../controllers/laser_controller.dart';
+import '../controllers/stroke_engine.dart';
 
 /// Per-page laser pointer overlay (rendered inside the page transform, in
 /// page space). Owns a ~30fps timer that drives the controller's fading while
@@ -60,6 +61,11 @@ class _LaserPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final now = DateTime.now().millisecondsSinceEpoch;
     final base = Color(laser.color);
+
+    // §2 laser points are page-local (anchor-relative) — translate onto
+    // the grown paper widget.
+    final pad = StrokeEngine.I.padOffsetOf(pageId);
+    canvas.translate(pad.dx, pad.dy);
 
     for (final s in laser.strokes) {
       if (s.pageId != pageId) continue;

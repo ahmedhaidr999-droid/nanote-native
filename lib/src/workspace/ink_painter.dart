@@ -86,6 +86,11 @@ class LiveStrokePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final s = StrokeEngine.I.liveStroke.value;
     if (s == null || s.isEmpty) return;
+    // §2: live-stroke points are ANCHOR-relative — translate by the page's
+    // pad offset so the preview lands on the grown paper correctly.
+    final pad = StrokeEngine.I.padOffsetOf(StrokeEngine.I.livePageId);
+    canvas.save();
+    canvas.translate(pad.dx, pad.dy);
     final paint = Paint();
     if (s.style.kind == StrokeKind.highlighter) {
       // Simple translucent preview — no saveLayer needed for a live preview.
@@ -95,6 +100,7 @@ class LiveStrokePainter extends CustomPainter {
     }
     // live=true: no end taper while the stroke is still growing.
     canvas.drawPath(s.buildPath(live: true), paint);
+    canvas.restore();
   }
 
   @override

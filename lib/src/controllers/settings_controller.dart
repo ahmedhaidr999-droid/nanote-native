@@ -58,6 +58,13 @@ class SettingsController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// §0 rail dock ('start' | 'end' | 'top' | 'bottom').
+  Future<void> setRailPosition(String v) async {
+    settings.railPosition = v;
+    await _persist();
+    notifyListeners();
+  }
+
   Future<void> setPressureCurve(double gamma) async {
     settings.pressureCurve = gamma;
     PressureCurve.gamma = gamma;

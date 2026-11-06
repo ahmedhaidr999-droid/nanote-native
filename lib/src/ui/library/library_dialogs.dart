@@ -529,7 +529,10 @@ class NotebookFormFieldsState extends State<NotebookFormFields> {
           spacing: 8,
           runSpacing: 8,
           children: [
-            for (final ps in PageSizeId.values)
+            // §1 the INFINITE paper is a notebook-creation kind, not a
+            // per-page size — keep it out of this dialog.
+            for (final ps in PageSizeId.values
+                .where((p) => p != PageSizeId.infinityPaper))
               ChoiceChip(
                 label: Text(S.t('size.${ps.name}')),
                 selected: _pageSize == ps,

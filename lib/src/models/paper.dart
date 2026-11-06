@@ -26,7 +26,8 @@ extension TemplateIdX on TemplateId {
 }
 
 /// Page sizes (logical px at 1x). A5 was APPENDED (indices are persisted in
-/// the DB — never reorder or insert).
+/// the DB — never reorder or insert). v2.4.0 APPENDED the INFINITE paper
+/// (794 wide, grows forever while you write — see doc_geometry.dart).
 enum PageSizeId {
   a4Portrait,
   a4Landscape,
@@ -34,6 +35,7 @@ enum PageSizeId {
   letterLandscape,
   a5Portrait,
   a5Landscape,
+  infinityPaper,
 }
 
 class PageSizeDef {
@@ -55,6 +57,10 @@ const Map<PageSizeId, PageSizeDef> PAGE_SIZES = {
       PageSizeDef(PageSizeId.letterLandscape, 1054, 816),
   PageSizeId.a5Portrait: PageSizeDef(PageSizeId.a5Portrait, 559, 794),
   PageSizeId.a5Landscape: PageSizeDef(PageSizeId.a5Landscape, 794, 559),
+  // §1 Infinity Paper: fixed 794-wide base that grows forever. The stored
+  // h (1123) is only the OPENING height — layout uses per-page growth.
+  PageSizeId.infinityPaper:
+      PageSizeDef(PageSizeId.infinityPaper, 794, 1123),
 };
 
 PageSizeDef pageSizeDef(PageSizeId id) =>
@@ -62,6 +68,18 @@ PageSizeDef pageSizeDef(PageSizeId id) =>
 
 PageSizeId pageSizeIdFrom(int id) =>
     PageSizeId.values[id.clamp(0, PageSizeId.values.length - 1)];
+
+/// §2 true when the (persisted) page-size id is the INFINITE paper.
+bool isInfinitySize(int id) => id == PageSizeId.infinityPaper.index;
+
+/// §2 Infinity-paper growth constants (doc units):
+///  * [kInfiniteChase] — the margin the paper keeps BEYOND new content
+///    before it grows ("the paper chases the pen").
+///  * [kInfiniteStep] — growth is rounded UP to multiples of this.
+///  * [kInfiniteGap] — vertical gap between consecutive infinite pages.
+const double kInfiniteChase = 140.0;
+const double kInfiniteStep = 512.0;
+const double kInfiniteGap = 28.0;
 
 /// Base grid pitch for grid snap / rulers (pt).
 const double GRID_PITCH = 24.0;

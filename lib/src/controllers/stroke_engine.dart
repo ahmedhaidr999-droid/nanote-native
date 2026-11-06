@@ -25,6 +25,19 @@ class PageMeta {
   /// StrokeEngine.applyPdfPageSize).
   Size? pdfSize;
 
+  /// §2 INFINITY PAPER growth (doc units, always ≥ 0, session state):
+  ///  * [padX] / [padY] — how far the paper extends LEFT OF / ABOVE the
+  ///    original origin. Page-local ink coordinates may be NEGATIVE down
+  ///    to (-padX, -padY).
+  ///  * [growW] / [growH] — how far the paper extends BEYOND the base
+  ///    width/height (right/bottom).
+  /// Derived from content on load, then grown monotonically while writing
+  /// (the paper chases the pen) — see StrokeEngine._growForContent.
+  double padX = 0;
+  double padY = 0;
+  double growW = 0;
+  double growH = 0;
+
   PageMeta({
     required this.id,
     required this.position,
@@ -37,8 +50,21 @@ class PageMeta {
 
   PageSizeDef get sizeDef => pageSizeDef(pageSizeIdFrom(pageSize));
 
-  /// The size used for layout: the PDF aspect when known, else the paper size.
-  Size get effectiveSize => pdfSize ?? sizeDef.size;
+  /// §2 true for INFINITE pages (growth/pads are no-ops otherwise).
+  bool get isInfinite => isInfinitySize(pageSize);
+
+  /// The size used for layout: the PDF aspect when known, else the paper
+  /// size — INFINITE pages add their growth pads (§2: four directions).
+  Size get effectiveSize {
+    final base = pdfSize ?? sizeDef.size;
+    if (!isInfinite) return base;
+    return Size(base.width + growW + padX, base.height + growH + padY);
+  }
+
+  /// §2 The FULL page rect offset of the original origin (anchor) relative
+  /// to the grown paper's top-left. Painters translate page-local ink by
+  /// this offset; the layout subtracts it from the rect origin.
+  Offset get padOffset => Offset(padX, padY);
 
   factory PageMeta.from(PageEntity p) => PageMeta(
         id: p.id,
@@ -63,6 +89,10 @@ class PageInk extends ChangeNotifier {
   final List<PageElement> elements = [];
 
   bool strokesLoaded = false;
+
+  /// §2 mirror of PageMeta.padOffset (kept in sync by the engine) — the
+  /// painters translate page-local (possibly negative) ink by this.
+  Offset padOffset = Offset.zero;
 
   PageInk(this.pageId);
 
@@ -459,12 +489,131 @@ class StrokeEngine extends ChangeNotifier {
 
   PageInk? pageInkOrNull(int pageId) => _inks[pageId];
 
+  // ------------------------------------------------- §2/§3 infinity paper
+
+  /// True when THIS notebook is an infinite-paper notebook (its default
+  /// page size is the infinite one — every page of the notebook shares it).
+  bool get isInfiniteDoc => notebook != null && isInfinitySize(notebook!.pageSize);
+
+  /// §2 Page-local pad offset of a page (painters use it to translate
+  /// anchor-relative ink onto the grown paper widget).
+  Offset padOffsetOf(int pageId) {
+    final meta = metaOf(pageId);
+    return meta?.padOffset ?? Offset.zero;
+  }
+
+  /// §3 THE CHASE: grows the page so the paper keeps [kInfiniteChase] doc
+  /// units of room beyond [newBounds] (page-local, possibly negative), in
+  /// steps of [kInfiniteStep]. Runs on every committed stroke/element —
+  /// ink flows freely WHILE drawing; the paper expands on lift/save.
+  /// Normal pages never grow (identical layout to v2.2.0).
+  void _growForContent(int pageId, Rect newBounds) {
+    final meta = metaOf(pageId);
+    if (meta == null || !meta.isInfinite) return;
+    var changed = false;
+
+    // Top edge: paper top (-padY) must stay ≥ chase above content top.
+    final needPadY = kInfiniteChase - newBounds.top;
+    if (needPadY > meta.padY) {
+      final target = math.max(
+        meta.padY + kInfiniteStep,
+        (needPadY / kInfiniteStep).ceil() * kInfiniteStep,
+      );
+      meta.padY = target;
+      changed = true;
+    }
+    // Left edge.
+    final needPadX = kInfiniteChase - newBounds.left;
+    if (needPadX > meta.padX) {
+      final target = math.max(
+        meta.padX + kInfiniteStep,
+        (needPadX / kInfiniteStep).ceil() * kInfiniteStep,
+      );
+      meta.padX = target;
+      changed = true;
+    }
+    // Right edge: paper right (baseW + growW) − chase ≥ content right.
+    final baseW = meta.sizeDef.size.width;
+    final needGrowW = newBounds.right + kInfiniteChase - baseW;
+    if (needGrowW > meta.growW) {
+      final target = math.max(
+        meta.growW + kInfiniteStep,
+        (needGrowW / kInfiniteStep).ceil() * kInfiniteStep,
+      );
+      meta.growW = target;
+      changed = true;
+    }
+    // Bottom edge.
+    final baseH = meta.sizeDef.size.height;
+    final needGrowH = newBounds.bottom + kInfiniteChase - baseH;
+    if (needGrowH > meta.growH) {
+      final target = math.max(
+        meta.growH + kInfiniteStep,
+        (needGrowH / kInfiniteStep).ceil() * kInfiniteStep,
+      );
+      meta.growH = target;
+      changed = true;
+    }
+
+    if (changed) {
+      final ink = pageInk(pageId);
+      ink.padOffset = meta.padOffset;
+      ink.touch(); // painters re-read the pad immediately
+      pagesChanged.notifyListeners(); // relayout with the new page rect
+    }
+  }
+
+  /// §2 Re-derives the pads of an infinite page from its CURRENT content
+  /// (used on load — same content → same geometry).
+  void _recomputePads(int pageId) {
+    final meta = metaOf(pageId);
+    if (meta == null || !meta.isInfinite) return;
+    Rect? bounds;
+    final ink = pageInkOrNull(pageId);
+    if (ink != null) {
+      for (final s in ink.strokes) {
+        bounds = bounds == null ? s.bbox : bounds.expandToInclude(s.bbox);
+      }
+      for (final e in ink.elements) {
+        bounds = bounds == null ? e.bbox() : bounds.expandToInclude(e.bbox());
+      }
+    }
+    meta.padX = 0;
+    meta.padY = 0;
+    meta.growW = 0;
+    meta.growH = 0;
+    if (bounds != null) _growForContent(pageId, bounds);
+    pageInk(pageId).padOffset = meta.padOffset;
+  }
+
+  /// Wipes ALL ink + elements of a page as ONE undoable step ("Clear
+  /// page" — the UI confirms with a two-stage button).
+  Future<void> clearPage(int pageId) async {
+    final ink = pageInk(pageId);
+    if (ink.strokes.isEmpty && ink.elements.isEmpty) return;
+    final strokes = [for (final s in ink.strokes) s.deepCopy()];
+    final elements = [for (final e in ink.elements) e.deepCopy()];
+    ink.strokes.clear();
+    ink.elements.clear();
+    markDirty(pageId);
+    ink.touch();
+    _clearSelection();
+    _pushOp(CompositeOp([
+      RemoveInkOp(pageId, strokes),
+      RemoveElementsOp(pageId, elements),
+    ]));
+    await flush();
+  }
+
   /// Lazily loads strokes for a page (called when it becomes visible).
   Future<void> ensureLoaded(int pageId) async {
     final ink = pageInk(pageId);
     if (ink.strokesLoaded) return;
     ink.strokes.addAll(await _repo.loadStrokes(pageId));
     ink.strokesLoaded = true;
+    // §3 Infinite pages: re-derive the growth pads from the loaded ink so
+    // reopening lands on the same geometry the content needs.
+    _recomputePads(pageId);
     ink.touch();
   }
 
@@ -523,6 +672,10 @@ class StrokeEngine extends ChangeNotifier {
 
   int _livePage = -1;
 
+  /// The page the live stroke is being drawn on (-1 when idle) — painters
+  /// use it to resolve the page's pad offset (§2).
+  int get livePageId => _livePage;
+
   void extendStroke(Offset pagePoint, double pressure, {bool realPressure = false}) {
     final s = liveStroke.value;
     if (s == null) return;
@@ -556,6 +709,8 @@ class StrokeEngine extends ChangeNotifier {
     markDirty(pageId);
     ink.touch();
     _pushOp(AddInkOp(pageId, [s.deepCopy()]));
+    // §3 the paper chases the pen (infinite pages only).
+    _growForContent(pageId, s.bbox);
   }
 
   void cancelStroke() {
@@ -1134,6 +1289,15 @@ class StrokeEngine extends ChangeNotifier {
     if (newStrokes.isNotEmpty) ops.add(AddInkOp(pageId, newStrokes));
     if (newElements.isNotEmpty) ops.add(AddElementsOp(pageId, newElements));
     _pushOp(ops.length == 1 ? ops.first : CompositeOp(ops));
+    // §3 pasted content may land beyond the current paper (infinite only).
+    Rect? pasted;
+    for (final s in newStrokes) {
+      pasted = pasted == null ? s.bbox : pasted.expandToInclude(s.bbox);
+    }
+    for (final e in newElements) {
+      pasted = pasted == null ? e.bbox() : pasted.expandToInclude(e.bbox());
+    }
+    if (pasted != null) _growForContent(pageId, pasted);
   }
 
   void bringSelectionToFront() {
@@ -1244,6 +1408,8 @@ class StrokeEngine extends ChangeNotifier {
     markDirty(pageId);
     ink.touch();
     _pushOp(AddElementsOp(pageId, [el.deepCopy()]));
+    // §3 the paper chases the pen (infinite pages only).
+    _growForContent(pageId, el.bbox());
   }
 
   void updateElement(int pageId, PageElement el) {
@@ -1257,6 +1423,8 @@ class StrokeEngine extends ChangeNotifier {
     markDirty(pageId);
     ink.touch();
     _pushOp(TransformOp(pageId, snap));
+    // §3 a moved/scaled element may need more paper (infinite pages only).
+    _growForContent(pageId, el.bbox());
   }
 
   void removeElement(int pageId, PageElement el) {
@@ -1284,6 +1452,8 @@ class StrokeEngine extends ChangeNotifier {
     markDirty(pageId);
     ink.touch();
     _pushOp(ReplaceInkOp(pageId, stroke, shape));
+    // §3 recognized shapes may extend past the ink they replace.
+    _growForContent(pageId, shape.bbox());
   }
 
   // -------------------------------------------------------------- page ops
