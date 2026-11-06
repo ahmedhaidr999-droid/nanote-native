@@ -720,6 +720,12 @@ class TranslateService {
     return launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
   }
 
+  /// Opens a web search for [text] (PDF text-selection "Search the web").
+  static Future<bool> openWebSearch(String text) {
+    final url = 'https://www.google.com/search?q=${Uri.encodeComponent(text)}';
+    return launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+
   /// Copies [text] to the clipboard, then launches the configured AI chat
   /// (chatgpt.com / gemini.google.com / claude.ai) with the text as query.
   static Future<void> askAi(BuildContext context, String text) async {

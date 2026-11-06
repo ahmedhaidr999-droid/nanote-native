@@ -10,9 +10,11 @@ import '../models/page_elements.dart';
 import '../models/paper.dart';
 import '../models/settings.dart';
 import '../models/tool.dart';
+import 'pdf_text_layer.dart';
 import '../workspace/doc_geometry.dart';
 import '../workspace/ruler_overlay.dart';
 import '../controllers/audio_controller.dart';
+import '../controllers/pdf_document_controller.dart';
 import '../controllers/pen_bus.dart';
 import '../controllers/settings_controller.dart';
 import '../controllers/shape_recognizer.dart';
@@ -54,6 +56,7 @@ class GestureRouter {
     required this.settings,
     required this.audio,
     required this.geometry,
+    required this.textSel,
     this.ruler,
     this.onToggleToolbar,
     this.onQuickExport,
@@ -73,6 +76,9 @@ class GestureRouter {
   final AudioController audio;
   final DocGeometry geometry;
   final RulerState? ruler;
+
+  /// PDF text selection state (long-press → select → action bar).
+  final PdfTextSelectionController textSel;
 
   final VoidCallback? onToggleToolbar;
   final VoidCallback? onQuickExport;
@@ -103,6 +109,7 @@ class GestureRouter {
 
   void dispose() {
     _barrelLongTimer?.cancel();
+    _cancelTextHold();
     tools.removeListener(_onToolsChanged);
     cropSession.value?.dispose();
     cropSession.dispose();
@@ -216,7 +223,9 @@ class GestureRouter {
       // SELECTION-CONTROL FIX: handles are grabbable by ANY tool — the pen
       // previously never hit-tested the selection, so inserted images could
       // not be resized/rotated with the stylus at all.
-      if (_tryBeginSelectionControl(e)) {
+      if (_tryBeginTextSelectionControl(e)) {
+        // PDF text-selection handle / body grab begun.
+      } else if (_tryBeginSelectionControl(e)) {
         // selection grab begun.
       } else if (isEraserKind || _hoverEraseActive || _isEraserTool) {
         _beginErase(e, stylus: true);
@@ -240,6 +249,11 @@ class GestureRouter {
         _deferredTap = _DeferredTap(e.localPosition, e.pointer);
       } else {
         _beginPan(e);
+      }
+      // Long-press → PDF text selection (any non-eraser tool; the live
+      // stroke is cancelled when it fires, so nothing unwanted is drawn).
+      if (!(isEraserKind || _hoverEraseActive || _isEraserTool)) {
+        _maybeStartTextHold(e);
       }
       return;
     }
@@ -266,43 +280,53 @@ class GestureRouter {
         //
         // SELECTION-CONTROL FIX: handles (and the selection body with the
         // non-drawing tools) are grabbable by the finger too.
-        if (!_tryBeginSelectionControl(e)) {
-          if (_isEraserTool) {
-            // §12 (user report): the eraser obeys the SAME finger rule as
-            // the pens — a finger erases ONLY while “draw with finger” is
-            // enabled; otherwise the finger pans, exactly like the pens.
-            if (settings.settings.drawWithFinger) {
-              _beginErase(e, stylus: false);
+        if (!_tryBeginTextSelectionControl(e)) {
+          if (!_tryBeginSelectionControl(e)) {
+            if (_isEraserTool) {
+              // §12 (user report): the eraser obeys the SAME finger rule as
+              // the pens — a finger erases ONLY while “draw with finger” is
+              // enabled; otherwise the finger pans, exactly like the pens.
+              if (settings.settings.drawWithFinger) {
+                _beginErase(e, stylus: false);
+              } else {
+                _beginPan(e);
+              }
+            } else if (_wantsInk(_tool) && settings.settings.drawWithFinger) {
+              _beginDraw(e, stylus: false);
+            } else if (_tool == Tool.shape) {
+              // §8 shape drag: same finger rule as the pens.
+              if (settings.settings.drawWithFinger) {
+                _beginShapeDrag(e, stylus: false);
+              } else {
+                _beginPan(e);
+              }
+            } else if (_tool == Tool.lasso) {
+              _beginLasso(e);
+            } else if (ruler != null &&
+                ruler!.active &&
+                _hitRuler(_toDoc(e.localPosition))) {
+              _beginRulerDrag(e);
+            } else if (_tool == Tool.text ||
+                _tool == Tool.textSelect ||
+                _tool == Tool.image ||
+                _tool == Tool.sticker) {
+              // Tap-tools work with a FINGER too (devices without a stylus):
+              // a quick tap fires the tool; a drag beyond 18px becomes a pan
+              // (see the deferred-tap guard in onPointerMove).
+              _deferredTap = _DeferredTap(e.localPosition, e.pointer);
             } else {
               _beginPan(e);
             }
-          } else if (_wantsInk(_tool) && settings.settings.drawWithFinger) {
-            _beginDraw(e, stylus: false);
-          } else if (_tool == Tool.shape) {
-            // §8 shape drag: same finger rule as the pens.
-            if (settings.settings.drawWithFinger) {
-              _beginShapeDrag(e, stylus: false);
-            } else {
-              _beginPan(e);
-            }
-          } else if (_tool == Tool.lasso) {
-            _beginLasso(e);
-          } else if (ruler != null && ruler!.active && _hitRuler(_toDoc(e.localPosition))) {
-            _beginRulerDrag(e);
-          } else if (_tool == Tool.text ||
-              _tool == Tool.textSelect ||
-              _tool == Tool.image ||
-              _tool == Tool.sticker) {
-            // Tap-tools work with a FINGER too (devices without a stylus):
-            // a quick tap fires the tool; a drag beyond 18px becomes a pan
-            // (see the deferred-tap guard in onPointerMove).
-            _deferredTap = _DeferredTap(e.localPosition, e.pointer);
-          } else {
-            _beginPan(e);
           }
         }
+        // Long-press → PDF text selection (works with touch, no stylus
+        // needed — the pan/draw this finger started is cancelled when it
+        // fires, so nothing unwanted happens).
+        _maybeStartTextHold(e);
       } else if (activeTouches == 1) {
-        // Second finger → pinch (focal stays under fingers).
+        // Second finger → pinch (focal stays under fingers); it also
+        // cancels any pending text-selection hold.
+        _cancelTextHold();
         final first = _pointers.values
             .firstWhere((p) => p.kind == PointerDeviceKind.touch && !p.rejected && p.pointer != e.pointer);
         if (_panPointer == first.pointer) _panPointer = -1;
@@ -320,6 +344,8 @@ class GestureRouter {
       final secondary = (e.buttons & kSecondaryMouseButton) != 0;
       if (secondary) {
         _beginPan(e);
+      } else if (_tryBeginTextSelectionControl(e)) {
+        // PDF text-selection handle / body grab begun.
       } else if (_tryBeginSelectionControl(e)) {
         // selection grab begun.
       } else if (_wantsInk(_tool) || _isEraserTool) {
@@ -335,6 +361,7 @@ class GestureRouter {
       } else {
         _beginPan(e);
       }
+      _maybeStartTextHold(e);
     }
   }
 
@@ -345,9 +372,21 @@ class GestureRouter {
     p.lastPos = e.localPosition;
     PenBus.I.publish(e, hover: false);
 
+    // A pending text-selection hold dies as soon as the pointer really
+    // moves (it must stay a press-and-hold).
+    if (_textHoldPointer == e.pointer &&
+        (_textHoldTimer != null || _pendingTextPick != null) &&
+        (e.localPosition - _textHoldScreen).distance > 18) {
+      _cancelTextHold();
+    }
+
     // Modal crop session swallows pointer moves.
     if (_handleCropMove(e)) return;
 
+    if (_textSelDrag != null && _textSelDrag!.pointer == e.pointer) {
+      _extendTextSelDrag(e.localPosition);
+      return;
+    }
     if (_shapeDrag != null && _shapeDrag!.pointer == e.pointer) {
       _extendShapeDrag(e);
       return;
@@ -396,7 +435,21 @@ class GestureRouter {
     // Modal crop session swallows pointer ups.
     if (_endCrop(e.pointer)) return;
 
+    _cancelTextHold();
+
     final p = _pointers.remove(e.pointer);
+
+    if (_textSelDrag != null && _textSelDrag!.pointer == e.pointer) {
+      final d = _textSelDrag!;
+      _textSelDrag = null;
+      // A tap INSIDE the selection toggles the action bar back on.
+      if (d.insideTap && textSel.hasSelection) {
+        textSel.toggleMenu();
+      }
+      // Early return: never feed a text-selection release to the tap
+      // detectors (no accidental double-tap zoom after selecting).
+      return;
+    }
 
     if (_shapeDrag != null && _shapeDrag!.pointer == e.pointer) {
       _endShapeDrag();
@@ -429,8 +482,11 @@ class GestureRouter {
     if (_panPointer == e.pointer) {
       // A pan that never really moved is a TAP — feed the double-tap
       // detector (previously the early return made finger double-tap zoom
-      // unreachable).
+      // unreachable) and dismiss a lingering text selection.
       final wasTap = _endPan(e, p);
+      if (wasTap && textSel.hasSelection) {
+        textSel.clear();
+      }
       if (wasTap && p != null && p.kind == PointerDeviceKind.touch) {
         _handleTapSequences(e.localPosition);
       }
@@ -450,6 +506,10 @@ class GestureRouter {
 
   void onPointerCancel(PointerCancelEvent e) {
     if (_endCrop(e.pointer)) return;
+    _cancelTextHold();
+    if (_textSelDrag != null && _textSelDrag!.pointer == e.pointer) {
+      _textSelDrag = null;
+    }
     _pointers.remove(e.pointer);
     if (_draw != null && _draw!.pointer == e.pointer) _cancelDraw();
     if (_erase != null && _erase!.pointer == e.pointer) _endErase();
@@ -560,6 +620,9 @@ class GestureRouter {
   // ------------------------------------------------------------- draw
 
   void _beginDraw(PointerDownEvent e, {required bool stylus, bool mouse = false}) {
+    // Drawing over the canvas dismisses a PDF text selection (its handles
+    // and action bar make room for the new ink).
+    if (textSel.hasSelection) textSel.clear();
     // Laser never commits to the document.
     if (_tool == Tool.laser) {
       final doc = _toDoc(e.localPosition);
@@ -714,6 +777,7 @@ class GestureRouter {
   // ------------------------------------------------------------- eraser
 
   void _beginErase(PointerDownEvent e, {required bool stylus}) {
+    if (textSel.hasSelection) textSel.clear();
     final doc = _toDoc(e.localPosition);
     final pageId = _pageIdAtDoc(doc);
     if (pageId == null) return;
@@ -752,6 +816,7 @@ class GestureRouter {
   // ------------------------------------------------------------- lasso
 
   void _beginLasso(PointerDownEvent e) {
+    if (textSel.hasSelection) textSel.clear();
     final doc = _toDoc(e.localPosition);
     final pageId = _pageIdAtDoc(doc);
     if (pageId == null) return;
@@ -894,6 +959,7 @@ class GestureRouter {
   // ------------------------------------------------------------- shapes (§8)
 
   void _beginShapeDrag(PointerDownEvent e, {required bool stylus}) {
+    if (textSel.hasSelection) textSel.clear();
     final doc = _toDoc(e.localPosition);
     final pageId = _pageIdAtDoc(doc);
     if (pageId == null) return;
@@ -1204,6 +1270,7 @@ class GestureRouter {
     final pageId = _pageIdAtDoc(doc);
     if (pageId == null) return;
     final pagePoint = _toPage(doc, pageId);
+    if (textSel.hasSelection) textSel.clear();
     if (_tool == Tool.text) {
       onTextTap?.call(pageId, pagePoint);
     } else if (_tool == Tool.textSelect) {
@@ -1213,6 +1280,251 @@ class GestureRouter {
     } else if (_tool == Tool.sticker) {
       onPickSticker?.call(pageId, pagePoint);
     }
+  }
+
+  // ------------------------------------------------------- PDF text select
+
+  static const Duration _textHoldDelay = Duration(milliseconds: 480);
+  Timer? _textHoldTimer;
+  int _textHoldPointer = -1;
+  Offset _textHoldScreen = Offset.zero;
+  int _textHoldPageId = -1;
+  int _textHoldPageNumber = 0;
+  _PdfSelDrag? _textSelDrag;
+
+  /// Long-press pick that is waiting for the background text extraction
+  /// to finish (the workspace completes it when the service notifies).
+  ({int pageId, int pageNumber, Offset screen, int pointer})?
+      _pendingTextPick;
+
+  bool get _pdfOpen => PdfDocumentController.I.isOpen;
+
+  int? _pdfPageNumberOf(int pageId) {
+    if (!_pdfOpen) return null;
+    final meta = engine.metaOf(pageId);
+    if (meta == null) return null;
+    final idx = engine.pages.indexOf(meta);
+    if (idx < 0 || idx >= PdfDocumentController.I.pageCount) return null;
+    return idx + 1;
+  }
+
+  /// Starts the long-press hold for [e] when it landed on a PDF-backed
+  /// page with a non-eraser tool. The hold is cancelled by movement,
+  /// lift, a second finger (pinch) or a modal session.
+  void _maybeStartTextHold(PointerDownEvent e) {
+    _cancelTextHold();
+    if (cropSession.value != null) return;
+    if (_tool == Tool.eraser) return;
+    if (!_pdfOpen) return;
+    // Never hijack an active text-selection drag or an ink selection.
+    if (_textSelDrag != null) return;
+    if (engine.hasSelection) return;
+    if (textSel.hasSelection) {
+      // A press ON the active selection (handles or body) is consumed by
+      // _tryBeginTextSelectionControl — starting a hold for it would
+      // reset the selection the user is adjusting.
+      final selPageId = textSel.pageId;
+      if (selPageId != null) {
+        final doc = _toDoc(e.localPosition);
+        final meta = geometry.pageAt(doc);
+        if (meta != null && meta.id == selPageId) {
+          final pagePoint = geometry.toPage(doc, selPageId);
+          final tolPage = 26 / viewport.scale;
+          final handles = textSel.handlePositionsPage();
+          final onHandle = handles != null &&
+              ((handles.$1 - pagePoint).distance <= tolPage ||
+                  (handles.$2 - pagePoint).distance <= tolPage);
+          final box = textSel.selectionBBoxPage();
+          if (onHandle ||
+              (box != null && box.inflate(6).contains(pagePoint))) {
+            return;
+          }
+        }
+      }
+    }
+    final doc = _toDoc(e.localPosition);
+    final meta = geometry.pageAt(doc);
+    if (meta == null) return;
+    final pageNum = _pdfPageNumberOf(meta.id);
+    if (pageNum == null) return;
+    _textHoldPointer = e.pointer;
+    _textHoldScreen = e.localPosition;
+    _textHoldPageId = meta.id;
+    _textHoldPageNumber = pageNum;
+    _textHoldTimer = Timer(_textHoldDelay, _tryBeginTextSelection);
+  }
+
+  void _cancelTextHold() {
+    _textHoldTimer?.cancel();
+    _textHoldTimer = null;
+    _textHoldPointer = -1;
+    _pendingTextPick = null;
+  }
+
+  void _tryBeginTextSelection() {
+    _textHoldTimer = null;
+    final pointer = _textHoldPointer;
+    if (pointer < 0) return;
+    final p = _pointers[pointer];
+    if (p == null || p.rejected) {
+      _cancelTextHold();
+      return;
+    }
+    if (cropSession.value != null || _pinch != null) {
+      _cancelTextHold();
+      return;
+    }
+    if (_tool == Tool.eraser) {
+      _cancelTextHold();
+      return;
+    }
+    // Abort whatever quiet gesture this pointer was holding (a stationary
+    // pan, a one-point "dot" stroke, a pending tap) — the long-press now
+    // owns the pointer and must NOT leave any ink behind.
+    if (_draw != null && _draw!.pointer == pointer) _cancelDraw();
+    if (_erase != null && _erase!.pointer == pointer) _endErase();
+    if (_panPointer == pointer) {
+      _panPointer = -1;
+      _velSamples.clear();
+    }
+    if (_deferredTap != null && _deferredTap!.pointer == pointer) {
+      _deferredTap = null;
+    }
+    _cancelHoldTimer();
+
+    final pageId = _textHoldPageId;
+    final pageNum = _textHoldPageNumber;
+    final screen = _textHoldScreen;
+    if (!PdfTextService.I.isReady) {
+      // Extraction still running — the workspace completes the pick when
+      // it lands (see completePendingTextPick).
+      _pendingTextPick = (
+        pageId: pageId,
+        pageNumber: pageNum,
+        screen: screen,
+        pointer: pointer
+      );
+      return;
+    }
+    _beginTextSelectionAt(pageId, pageNum, screen, pointer);
+    _cancelTextHold();
+  }
+
+  /// Called by the workspace when the text service finished loading —
+  /// completes a long-press that was waiting for extraction.
+  void completePendingTextPick() {
+    final pp = _pendingTextPick;
+    if (pp == null) return;
+    final p = _pointers[pp.pointer];
+    if (p == null || p.rejected) {
+      _cancelTextHold();
+      return;
+    }
+    _beginTextSelectionAt(pp.pageId, pp.pageNumber, pp.screen, pp.pointer);
+    _cancelTextHold();
+  }
+
+  void _beginTextSelectionAt(
+      int pageId, int pageNumber, Offset screen, int pointer) {
+    final doc = _toDoc(screen);
+    final meta = engine.metaOf(pageId);
+    if (meta == null) return;
+    final idx = engine.pages.indexOf(meta);
+    if (idx < 0) return;
+    final rect = geometry.pageRect(idx);
+    final pdfPts = PdfDocumentController.I.pageSize(pageNumber);
+    if (pdfPts == null || pdfPts.width <= 0 || rect.width <= 0) return;
+    final scale = rect.width / pdfPts.width;
+    final pagePoint = geometry.toPage(doc, pageId);
+    final viewPoint = Offset(pagePoint.dx / scale, pagePoint.dy / scale);
+    final page = PdfTextService.I.page(pageNumber);
+    if (page == null || page.words.isEmpty) return;
+    final hit = PdfTextSelectionController.hitWordInPage(page, viewPoint);
+    if (hit == null) return; // empty area / image → no menu (spec)
+    textSel.begin(
+      pageId: pageId,
+      pageNumber: pageNumber,
+      scale: scale,
+      wordIndex: hit,
+      pdfxW: pdfPts.width,
+      pdfxH: pdfPts.height,
+    );
+    // The same pointer keeps extending the selection word by word.
+    _textSelDrag = _PdfSelDrag(
+      pointer: pointer,
+      handle: PdfSelHandle.end,
+      insideTap: false,
+    );
+  }
+
+  /// Pointer-down routing for an EXISTING text selection: grab a handle
+  /// (extend that boundary) or tap inside the selection (toggle the
+  /// action bar). Returns true when consumed.
+  bool _tryBeginTextSelectionControl(PointerDownEvent e) {
+    if (!textSel.hasSelection) return false;
+    if (cropSession.value != null) return false;
+    final pageId = textSel.pageId;
+    if (pageId == null) return false;
+    final doc = _toDoc(e.localPosition);
+    final meta = geometry.pageAt(doc);
+    if (meta == null || meta.id != pageId) return false;
+
+    const tol = 26.0; // screen px
+    final handles = textSel.handlePositionsPage();
+    if (handles == null) return false;
+    final origin = geometry.pageOrigin(pageId);
+    final sPos = viewport.toScreen(handles.$1 + origin);
+    final ePos = viewport.toScreen(handles.$2 + origin);
+    if ((e.localPosition - sPos).distance <= tol) {
+      textSel.beginHandleDrag(leftSide: true);
+      _textSelDrag = _PdfSelDrag(
+        pointer: e.pointer,
+        handle: PdfSelHandle.start,
+        insideTap: false,
+      );
+      return true;
+    }
+    if ((e.localPosition - ePos).distance <= tol) {
+      textSel.beginHandleDrag(leftSide: false);
+      _textSelDrag = _PdfSelDrag(
+        pointer: e.pointer,
+        handle: PdfSelHandle.end,
+        insideTap: false,
+      );
+      return true;
+    }
+    // Tap INSIDE the selection body → toggle the action bar (consumed; a
+    // drag from here does nothing until release).
+    final pagePoint = geometry.toPage(doc, pageId);
+    final box = textSel.selectionBBoxPage();
+    if (box != null && box.inflate(6).contains(pagePoint)) {
+      _textSelDrag = _PdfSelDrag(
+        pointer: e.pointer,
+        handle: PdfSelHandle.none,
+        insideTap: true,
+      );
+      return true;
+    }
+    return false;
+  }
+
+  void _extendTextSelDrag(Offset screen) {
+    final d = _textSelDrag!;
+    if (d.handle == PdfSelHandle.none) return; // inside-tap: no drag action
+    final sel = textSel;
+    final pageId = sel.pageId;
+    if (pageId == null) {
+      _textSelDrag = null;
+      return;
+    }
+    final doc = _toDoc(screen);
+    final meta = geometry.pageAt(doc);
+    if (meta == null || meta.id != pageId) return;
+    final pagePoint = geometry.toPage(doc, pageId);
+    final viewPoint =
+        Offset(pagePoint.dx / sel.scale, pagePoint.dy / sel.scale);
+    final hit = sel.hitWord(viewPoint);
+    if (hit != null) sel.dragFocusTo(hit);
   }
 
   void _handleTapSequences(Offset screen) {
@@ -1346,6 +1658,19 @@ class GestureRouter {
 }
 
 enum FingerAction { doubleTap, twoFingerTap }
+
+/// Active PDF text-selection drag: which pointer owns it, which handle
+/// (start/end, none for an inside tap) moves.
+class _PdfSelDrag {
+  final int pointer;
+  final PdfSelHandle handle;
+  final bool insideTap;
+  _PdfSelDrag({
+    required this.pointer,
+    required this.handle,
+    required this.insideTap,
+  });
+}
 
 /// Eraser-end button bit (value 32) reported by stylus events.
 const int kEraserButtonBit = 0x20;

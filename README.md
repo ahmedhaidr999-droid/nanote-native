@@ -10,7 +10,45 @@ Full feature parity with the Nanote v1.9.1 web app, rebuilt native.
 <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
-## v2.2.0 — Nanote v1.9.1 design system + PDF continuity fix
+## v2.5.0 — PDF text selection + true-highlighter rendering
+
+**Long-press any text in a PDF to select it.** Nanote now ships its own
+pure-Dart PDF text extractor (no new dependencies, fully offline): it
+parses classic xref tables, PDF 1.5+ xref streams, object streams,
+Flate/ASCII85 filters, simple + composite (Identity-H) fonts with
+ToUnicode CMaps, tracks the full text matrix, groups glyphs into
+RTL-aware words/lines, and maps everything through the page's /Rotate so
+the selection rectangles land exactly on the visible text — verified
+against Latin, Arabic and rotated pages.
+
+Selection is touch-first (no stylus needed) and works with any
+non-eraser tool: press-and-hold picks the nearest word, drag or pull the
+handles to extend, and an action bar appears with **Copy · Translate ·
+Search the web · Highlight · Underline · Select text · Select all ·
+Ask (the AI chosen in Settings: ChatGPT / Gemini / Claude)**. Highlight
+and Underline commit real ink strokes through the engine — undoable,
+autosaved, and rendered with the highlighter's live color/density. A
+long-press on empty space or an image shows nothing (no text, no menu),
+and the hold cancels any in-progress stroke so nothing unwanted is
+drawn. Extraction runs once per document on a background isolate, so
+the UI never blocks.
+
+**The highlighter now behaves like a real highlighter.** Two bugs fixed:
+1. *Opacity changes only applied after switching pages* — the renderer
+   grouped strokes by color alone and painted each group at the FIRST
+   stroke's opacity, so a stroke drawn right after changing the density
+   rendered at the old value. Strokes are now grouped by (color,
+   opacity) and every stroke renders at the density it was drawn with.
+2. *100% opacity hid the text underneath* — highlight groups now
+   composite with a MULTIPLY blend: the ink and PDF text under the
+   highlight stay readable at ANY density (dark text stays dark; white
+   paper takes the tint), overlapping strokes of the same color never
+   self-darken, and the live preview matches the committed look
+   (previously a hardcoded 50% alpha). Verified at pixel level: black
+   text under a 100% highlight stays black.
+
+## v2.4.0 — PDF all-pages root fix + Infinity Paper
+
 
 **PDF notebooks now show every page.** Opening a PDF notebook self-heals its
 page list to the PDF's page count (notebooks created by older versions — or

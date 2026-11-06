@@ -718,6 +718,25 @@ class StrokeEngine extends ChangeNotifier {
     _livePage = -1;
   }
 
+  /// Commits PRE-BUILT strokes (e.g. PDF text highlight / underline
+  /// annotations) as ONE undoable op — the exact same pipeline
+  /// [endStroke] uses, so autosave, undo/redo and the infinite-paper
+  /// growth behave identically.
+  void commitStrokes(int pageId, List<Stroke> strokes) {
+    if (pageId < 0 || strokes.isEmpty) return;
+    final ink = pageInk(pageId);
+    for (final s in strokes) {
+      ink.strokes.add(s);
+    }
+    ink.sortInk();
+    markDirty(pageId);
+    ink.touch();
+    _pushOp(AddInkOp(pageId, [for (final s in strokes) s.deepCopy()]));
+    for (final s in strokes) {
+      _growForContent(pageId, s.bbox);
+    }
+  }
+
   // ---------------------------------------------------------------- eraser
 
   final Set<int> _eraseGestureStrokes = {};

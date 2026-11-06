@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../controllers/audio_controller.dart';
@@ -19,6 +20,7 @@ import '../models/tool.dart';
 import '../persistence/file_store.dart';
 import '../services/export_service.dart';
 import '../services/image_cache.dart';
+import '../services/translate_service.dart';
 import '../theme/nanote_theme.dart';
 import '../ui/panels/audio_panel.dart' show showAudioPanel;
 import '../ui/panels/pages_sheet.dart' show showPagesSheet;
@@ -32,6 +34,7 @@ import 'ink_painter.dart';
 import 'laser_overlay.dart';
 import 'paper_painter.dart';
 import 'pdf_page_tile.dart';
+import 'pdf_text_layer.dart';
 import 'ruler_overlay.dart';
 import 'tool_rail.dart';
 import 'tool_settings_panel.dart';
@@ -55,6 +58,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
   late final RulerState ruler;
   late final GestureRouter router;
   late final Listenable _canvasRepaint;
+  late final PdfTextSelectionController textSel;
 
   Timer? _autosave;
   int _lastAutosaveMs = -1;
@@ -78,6 +82,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     viewport = ViewportController();
     geometry = DocGeometry(engine.pages);
     ruler = RulerState();
+    textSel = PdfTextSelectionController();
     router = GestureRouter(
       viewport: viewport,
       engine: engine,
@@ -85,6 +90,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
       settings: SettingsController.I,
       audio: AudioController.I,
       geometry: geometry,
+      textSel: textSel,
       ruler: ruler,
       onToggleToolbar: () => setState(() => _railHidden = !_railHidden),
       onQuickExport: _quickExport,
@@ -114,8 +120,15 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     AudioController.I.addListener(_updateRecordingClock);
     _updateRecordingClock();
     SettingsController.I.addListener(_onSettingsChanged);
+    // PDF text layer: complete pending long-press picks the moment the
+    // background extraction lands.
+    PdfTextService.I.addListener(_onPdfTextReady);
 
     unawaited(_open());
+  }
+
+  void _onPdfTextReady() {
+    router.completePendingTextPick();
   }
 
   Future<void> _open() async {
@@ -131,6 +144,8 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
         // notebooks (single-page import era) show only page 1 otherwise.
         if (ok) {
           await engine.syncPagesToPdfCount(PdfDocumentController.I.pageCount);
+          // Background text extraction for long-press text selection.
+          unawaited(PdfTextService.I.load(f.path));
         }
       }
     }
@@ -232,8 +247,11 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     StrokeEngine.I.historyChanged.removeListener(_flushNow);
     AudioController.I.removeListener(_updateRecordingClock);
     SettingsController.I.removeListener(_onSettingsChanged);
+    PdfTextService.I.removeListener(_onPdfTextReady);
     StrokeEngine.I.recordingClock = null;
     router.dispose();
+    textSel.dispose();
+    PdfTextService.I.clear();
     unawaited(StrokeEngine.I.flush());
     unawaited(StrokeEngine.I.close());
     unawaited(PdfDocumentController.I.close());
@@ -719,6 +737,10 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
                             child: _buildSelectionHandles(context),
                           ),
                           KeyedSubtree(
+                            key: const ValueKey('overlay-pdf-text-selection'),
+                            child: _buildPdfTextSelectionOverlay(context),
+                          ),
+                          KeyedSubtree(
                             key: const ValueKey('overlay-crop'),
                             child: _buildCropOverlay(context),
                           ),
@@ -741,6 +763,15 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
                 valueListenable: router.cropSession,
                 builder: (context, crop, _) => crop == null
                     ? _buildSelectionBar(context)
+                    : const SizedBox.shrink(),
+              ),
+            ),
+            AnimatedBuilder(
+              animation: viewport,
+              builder: (context, _) => ValueListenableBuilder<CropSession?>(
+                valueListenable: router.cropSession,
+                builder: (context, crop, _) => crop == null
+                    ? _buildPdfTextBar(context)
                     : const SizedBox.shrink(),
               ),
             ),
@@ -1267,6 +1298,161 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
         );
       },
     );
+  }
+
+  /// PDF text-selection rectangles + handles (page space of the owning
+  /// page — the same doc-space overlay pattern as the ink selection).
+  Widget _buildPdfTextSelectionOverlay(BuildContext context) {
+    final engine = StrokeEngine.I;
+    return ListenableBuilder(
+      listenable: Listenable.merge([textSel, PdfTextService.I]),
+      builder: (context, _) {
+        if (!textSel.hasSelection) return const SizedBox.shrink();
+        final pageId = textSel.pageId;
+        if (pageId == null) return const SizedBox.shrink();
+        final idx = engine.pages.indexWhere((p) => p.id == pageId);
+        if (idx < 0) return const SizedBox.shrink();
+        final rect = geometry.pageRect(idx);
+        final scheme = Theme.of(context).colorScheme;
+        return Positioned.fromRect(
+          rect: rect,
+          child: CustomPaint(
+            size: rect.size,
+            painter: PdfSelectionPainter(
+              sel: textSel,
+              primary: scheme.primary,
+              surface: scheme.surface,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Floating PDF text-selection action bar (screen space, above the
+  /// selection): Copy · Translate · Search the web · Highlight ·
+  /// Underline · Select text · Select all · Ask <AI>.
+  Widget _buildPdfTextBar(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListenableBuilder(
+      listenable: Listenable.merge([textSel, PdfTextService.I]),
+      builder: (context, _) {
+        if (!textSel.hasSelection || !textSel.menuVisible) {
+          return const SizedBox.shrink();
+        }
+        final pageId = textSel.pageId;
+        final box = textSel.selectionBBoxPage();
+        if (pageId == null || box == null) return const SizedBox.shrink();
+        final origin = geometry.pageOrigin(pageId);
+        final topLeftScreen = viewport.toScreen(box.topLeft + origin);
+        final bottomScreen =
+            viewport.toScreen(Offset(box.right, box.bottom) + origin);
+        var top = topLeftScreen.dy - 60;
+        if (top < 8) top = bottomScreen.dy + 12;
+        top = top
+            .clamp(8.0, math.max(8.0, _screenSize.height - 72))
+            .toDouble();
+        final left = (topLeftScreen.dx - 24)
+            .clamp(8.0, math.max(8.0, _screenSize.width - 120))
+            .toDouble();
+        return Positioned(
+          left: left,
+          top: top,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: scheme.outline),
+              boxShadow: nanoteColors(context).inkShadow2,
+            ),
+            child: Material(
+              elevation: 0,
+              borderRadius: BorderRadius.circular(999),
+              color: scheme.surface,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _barBtn(LucideIcons.copy, 'copy', () {
+                      _copyPdfSelection();
+                    }),
+                    _barBtn(LucideIcons.languages, 'translate', () {
+                      final text = textSel.selectedText();
+                      textSel.clear();
+                      if (text.trim().isNotEmpty) {
+                        unawaited(showTranslatePopup(context, text));
+                      }
+                    }),
+                    _barBtn(LucideIcons.globe, 'searchWeb', () {
+                      final text = textSel.selectedText();
+                      textSel.clear();
+                      if (text.trim().isNotEmpty) {
+                        unawaited(TranslateService.openWebSearch(text));
+                      }
+                    }),
+                    _barBtn(LucideIcons.highlighter, 'highlightText', () {
+                      _annotatePdfSelection(highlight: true);
+                    }),
+                    _barBtn(LucideIcons.underline, 'underlineText', () {
+                      _annotatePdfSelection(highlight: false);
+                    }),
+                    _barBtn(LucideIcons.text_cursor_input, 'selectText', () {
+                      // Keep the handles, hide the bar (tap inside the
+                      // selection to bring it back).
+                      textSel.hideMenu();
+                    }),
+                    _barBtn(LucideIcons.list_checks, 'selectAll', () {
+                      textSel.selectAll();
+                    }),
+                    _barBtn(LucideIcons.sparkles, _askAiLabel(), () {
+                      final text = textSel.selectedText();
+                      textSel.clear();
+                      if (text.trim().isNotEmpty) {
+                        unawaited(TranslateService.askAi(context, text));
+                      }
+                    }),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _askAiLabel() {
+    final service = SettingsController.I.settings.aiService;
+    return switch (service) {
+      'gemini' => 'askGemini',
+      'claude' => 'askClaude',
+      _ => 'askChatgpt',
+    };
+  }
+
+  void _copyPdfSelection() {
+    final text = textSel.selectedText();
+    textSel.clear();
+    if (text.trim().isEmpty) return;
+    Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(S.t('copiedToClipboard'))),
+      );
+  }
+
+  /// Commits highlight / underline strokes over the selected text (ONE
+  /// undoable op via the engine, new strokes only — existing annotations
+  /// keep their own colors/opacity).
+  void _annotatePdfSelection({required bool highlight}) {
+    final pageId = textSel.pageId;
+    if (pageId == null) return;
+    final strokes = highlight
+        ? textSel.buildHighlightStrokes()
+        : textSel.buildUnderlineStrokes();
+    if (strokes.isEmpty) return;
+    StrokeEngine.I.commitStrokes(pageId, strokes);
+    textSel.clear();
   }
 
   Widget _barBtn(IconData icon, String label, VoidCallback? onTap) {

@@ -222,8 +222,9 @@ class ElementsPainter extends CustomPainter {
 /// * Paper is delegated to [PaperPainter].
 /// * Strokes and elements merge in z order (both engine lists are z-sorted;
 ///   ties prefer the stroke).
-/// * Highlighter strokes render LAST, grouped per color inside one
-///   saveLayer each (never self-darkens) — see [InkPainter].
+/// * Highlighter strokes render LAST, grouped per (color, opacity) inside
+///   one MULTIPLY saveLayer each (never self-darkens, keeps the PDF text
+///   readable) — see [InkPainter].
 /// * [selectedStrokeIds] / [selectedElementIds] (when non-null) add a
 ///   translucent primary tint over the selected items.
 /// * [scaleForThumb] scales everything down for small thumbnail canvases
@@ -280,7 +281,7 @@ class PageContentPainter extends CustomPainter {
     // Interleaved z order (two-pointer merge of two z-sorted lists).
     final strokes = ink.strokes;
     final elements = ink.elements;
-    final highlighters = <int, List<Stroke>>{};
+    final highlighters = <(int, double), List<Stroke>>{};
     final plain = Paint();
     var si = 0;
     var ei = 0;
@@ -291,7 +292,9 @@ class PageContentPainter extends CustomPainter {
         final s = strokes[si++];
         if (InkPainter.hiddenByReplay(s, replayAt)) continue;
         if (s.style.kind == StrokeKind.highlighter) {
-          highlighters.putIfAbsent(s.style.color, () => []).add(s);
+          highlighters
+              .putIfAbsent((s.style.color, s.style.opacity), () => [])
+              .add(s);
           continue;
         }
         plain.color = s.style.flutterColor;
