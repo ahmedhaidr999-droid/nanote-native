@@ -197,24 +197,39 @@ class _ToolRailState extends State<ToolRail> {
         widget.ruler,
         SettingsController.I,
       ]),
-      builder: (context, _) => Flexible(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final t in _groupA) _toolButton(context, t),
-              _separator(context),
-              for (final t in _groupB) _toolButton(context, t),
-              _separator(context),
-              for (final e in _groupC) _extraButton(context, e),
-              _separator(context),
-              _undoRedo(context),
-              _colorButton(context),
-              _collapseButton(context),
-            ],
+      // GRAY-SCREEN FIX (v2.5.2): this capsule sits inside
+      // Align > SafeArea > Container — there is NO Flex ancestor, so the
+      // old `Flexible` wrapper threw
+      // "type 'BoxParentData' is not a subtype of 'FlexParentData'"
+      // on EVERY build in RELEASE mode (asserts hide it in debug), which
+      // replaced most of the workspace with the gray release ErrorWidget.
+      // Cap the scroll height to the viewport instead — long rails
+      // scroll exactly like before, without needing a Flex parent.
+      builder: (context, _) {
+        final safe = MediaQuery.paddingOf(context);
+        final maxH = MediaQuery.sizeOf(context).height -
+            safe.vertical -
+            140; // app bar + capsule padding + dock margins
+        return ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxH < 120 ? 120 : maxH),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final t in _groupA) _toolButton(context, t),
+                _separator(context),
+                for (final t in _groupB) _toolButton(context, t),
+                _separator(context),
+                for (final e in _groupC) _extraButton(context, e),
+                _separator(context),
+                _undoRedo(context),
+                _colorButton(context),
+                _collapseButton(context),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
