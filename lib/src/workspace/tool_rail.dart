@@ -284,7 +284,7 @@ class _ToolRailState extends State<ToolRail> {
       case _ExtraRail.finger:
         final on = SettingsController.I.settings.drawWithFinger;
         return _RailButton(
-          icon: LucideIcons.fingerprint,
+          icon: LucideIcons.pointer,
           active: on,
           tooltip: S.t(on ? 'fingerWriteOn' : 'fingerWriteOff'),
           onTap: () => widget.onToggleFinger?.call(!on),

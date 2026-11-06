@@ -1271,7 +1271,7 @@ class _ClearPageButtonState extends State<_ClearPageButton> {
           ),
         ),
         onPressed: _tap,
-        icon: Icon(LucideIcons.trash_2, size: 16),
+        icon: Icon(LucideIcons.eraser, size: 16),
         label: Text(
           S.t(_armed ? 'confirmClearPage' : 'clearPage'),
           maxLines: 1,

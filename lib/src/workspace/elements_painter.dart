@@ -160,9 +160,24 @@ class ElementsPainter extends CustomPainter {
     } else if (el.src != null) {
       final img = resolveImage?.call(el.src!);
       if (img != null) {
+        // Source sub-rect: the normalized crop window (0..1), else the
+        // whole image.
+        final c = el.crop;
+        Rect src;
+        if (c != null && c.length == 4) {
+          src = Rect.fromLTRB(
+            c[0].clamp(0.0, 1.0) * img.width,
+            c[1].clamp(0.0, 1.0) * img.height,
+            c[2].clamp(0.0, 1.0) * img.width,
+            c[3].clamp(0.0, 1.0) * img.height,
+          );
+        } else {
+          src = Rect.fromLTWH(
+              0, 0, img.width.toDouble(), img.height.toDouble());
+        }
         canvas.drawImageRect(
           img,
-          Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
+          src,
           dst,
           Paint()..filterQuality = FilterQuality.medium,
         );

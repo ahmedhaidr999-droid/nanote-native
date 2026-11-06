@@ -273,6 +273,11 @@ class ImageEl extends PageElement {
   double rotation; // radians
   bool flipH, flipV;
 
+  /// Normalized SOURCE crop window [left, top, right, bottom] (0..1 of the
+  /// underlying image). null → the full image is shown. Set by the crop
+  /// editor; the element box always holds what remains VISIBLE.
+  List<double>? crop;
+
   ImageEl({
     required this.id,
     required this.z,
@@ -285,6 +290,7 @@ class ImageEl extends PageElement {
     this.rotation = 0,
     this.flipH = false,
     this.flipV = false,
+    this.crop,
   });
 
   @override
@@ -296,6 +302,7 @@ class ImageEl extends PageElement {
   ImageEl deepCopy() => ImageEl(
         id: id,
         z: z,
+        crop: crop == null ? null : List<double>.of(crop!),
         src: src,
         builtinId: builtinId,
         x: x,
@@ -321,6 +328,7 @@ class ImageEl extends PageElement {
         'r': rotation,
         'fh': flipH,
         'fv': flipV,
+        if (crop != null) 'c': crop,
       };
 
   factory ImageEl.fromJson(Map<String, dynamic> j) => ImageEl(
@@ -335,6 +343,9 @@ class ImageEl extends PageElement {
         rotation: (j['r'] as num?)?.toDouble() ?? 0,
         flipH: j['fh'] as bool? ?? false,
         flipV: j['fv'] as bool? ?? false,
+        crop: (j['c'] as List?)
+            ?.map((e) => (e as num).toDouble())
+            .toList(),
       );
 }
 
