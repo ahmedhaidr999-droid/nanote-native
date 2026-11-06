@@ -144,8 +144,17 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
         // notebooks (single-page import era) show only page 1 otherwise.
         if (ok) {
           await engine.syncPagesToPdfCount(PdfDocumentController.I.pageCount);
-          // Background text extraction for long-press text selection.
-          unawaited(PdfTextService.I.load(f.path));
+          // Background text extraction for long-press text selection —
+          // v2.6.0: DELAYED by a beat. The isolate copies the whole PDF
+          // and parses every page, competing with the first page RENDERS
+          // for memory on low-RAM devices (the "only page 1 renders" OOM
+          // driver). The visible page renders first; the text layer lands
+          // right after.
+          Future<void>.delayed(const Duration(seconds: 2), () {
+            if (PdfDocumentController.I.currentPath == f.path) {
+              unawaited(PdfTextService.I.load(f.path));
+            }
+          });
         }
       }
     }

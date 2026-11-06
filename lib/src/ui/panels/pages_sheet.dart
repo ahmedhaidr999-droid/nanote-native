@@ -717,7 +717,7 @@ class _PdfThumb extends StatefulWidget {
 
 class _PdfThumbState extends State<_PdfThumb> {
   ui.Image? _pdfImage;
-  String? _retainedKey;
+  String? _retainedHandle;
 
   @override
   void initState() {
@@ -735,11 +735,11 @@ class _PdfThumbState extends State<_PdfThumb> {
     try {
       final bmp = await ctrl.pageImage(index + 1, 0.4);
       if (mounted && bmp != null) {
-        // Retain while this thumbnail paints it.
-        ctrl.retain(bmp.key);
+        // Retain while this thumbnail paints it (by unique handle).
+        ctrl.retain(bmp.handle);
         setState(() {
           _pdfImage = bmp.image;
-          _retainedKey = bmp.key;
+          _retainedHandle = bmp.handle;
         });
       }
     } catch (_) {
@@ -749,9 +749,9 @@ class _PdfThumbState extends State<_PdfThumb> {
 
   @override
   void dispose() {
-    final key = _retainedKey;
-    if (key != null) {
-      PdfDocumentController.I.release(key);
+    final handle = _retainedHandle;
+    if (handle != null) {
+      PdfDocumentController.I.release(handle);
     }
     super.dispose();
   }

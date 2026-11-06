@@ -6,14 +6,20 @@ import 'package:flutter/material.dart';
 import '../controllers/pdf_document_controller.dart';
 import '../controllers/viewport_controller.dart';
 
-/// A rendered PDF page: the decoded image + its cache key (the tile
-/// retains/releases the key so the controller never disposes pixels a
-/// visible tile is still painting).
+/// A rendered PDF page: the decoded image, its cache key ('page@widthPx')
+/// and its UNIQUE live handle. The tile retains/releases by HANDLE
+/// (v2.6.0) — a same-key re-render can never collide with the ref-count
+/// of the image a visible tile is still painting.
 class PdfPageBitmap {
-  const PdfPageBitmap(this.image, this.key);
+  const PdfPageBitmap(this.image, this.key, this.handle);
 
   final ui.Image image;
+
+  /// Cache/dedupe key: 'pageNumber@widthPx'.
   final String key;
+
+  /// Unique live-image handle the controller ref-counts.
+  final String handle;
 }
 
 /// One PDF background page. Positioned per page by the workspace (inside the
@@ -57,7 +63,7 @@ class PdfPageTile extends StatefulWidget {
 
 class _PdfPageTileState extends State<PdfPageTile> {
   ui.Image? _image;
-  String? _retainedKey;
+  String? _retainedHandle;
   double _requestedScale = 0;
   bool _pending = false;
   Timer? _retryTimer;
@@ -110,10 +116,10 @@ class _PdfPageTileState extends State<PdfPageTile> {
   }
 
   void _dropRetained() {
-    final key = _retainedKey;
-    if (key != null) {
-      widget.pdf.release(key);
-      _retainedKey = null;
+    final handle = _retainedHandle;
+    if (handle != null) {
+      widget.pdf.release(handle);
+      _retainedHandle = null;
     }
   }
 
@@ -147,10 +153,10 @@ class _PdfPageTileState extends State<PdfPageTile> {
         return;
       }
       _retries = 0;
-      if (bmp.key != _retainedKey) {
+      if (bmp.handle != _retainedHandle) {
         _dropRetained();
-        _retainedKey = bmp.key;
-        widget.pdf.retain(bmp.key);
+        _retainedHandle = bmp.handle;
+        widget.pdf.retain(bmp.handle);
       }
       setState(() => _image = bmp.image);
     } finally {

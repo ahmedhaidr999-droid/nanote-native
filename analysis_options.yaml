@@ -4,6 +4,10 @@ analyzer:
   exclude:
     - "**/*.g.dart"
     - "lib/src/generated/**"
+    # Vendored pdfx fork: the pigeons/ folder is the Pigeon INPUT spec
+    # (regenerates the committed platform code); it references the `pigeon`
+    # dev tool which is not an app dependency.
+    - "third_party/pdfx/pigeons/**"
 
 linter:
   rules:

@@ -1,7 +1,7 @@
 name: nanote_native
 description: "Nanote Native — local-first handwriting notes app (Flutter, Android)."
 publish_to: "none"
-version: 2.5.2+1
+version: 2.6.0+1
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
@@ -49,7 +49,15 @@ dev_dependencies:
 
 # pdfx 2.11 vendors an InteractiveViewer that calls Matrix4.translateByDouble/
 # scaleByDouble, added in vector_math 2.2.0 (Flutter 3.29 pins 2.1.4).
+#
+# PDFX VENDORED FORK (v2.6.0 "gray pages 2+" fix): third_party/pdfx is
+# pdfx 2.11.0 with ONE critical Android native fix — the renderPage
+# coroutine catches Throwable (not just Exception), so an OutOfMemoryError
+# during Bitmap.createBitmap always delivers the platform reply instead of
+# wedging the Dart render future forever ("only page 1 renders").
 dependency_overrides:
+  pdfx:
+    path: third_party/pdfx
   vector_math: 2.2.0
 
 flutter:

@@ -10,6 +10,60 @@ Full feature parity with the Nanote v1.9.1 web app, rebuilt native.
 <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
+## v2.6.0 — "Only page 1 renders, pages 2+ stay gray" — root cause fixed
+
+**The bug:** after the v2.5.2 gray-screen fix, PDFs opened showing ONLY the
+first page; every other page stayed blank/gray no matter how much the user
+scrolled or flipped pages.
+
+**Root cause (found by reproducing the full pipeline against a faithful
+fake of pdfx's Android native layer):** pdfx 2.11's Android `renderPage`
+coroutine (`Messages.kt`) catches only `Exception`. Rendering a full page
+allocates a large ARGB bitmap (`Bitmap.createBitmap`); under memory
+pressure that throws **`OutOfMemoryError` — an `Error`, not an
+`Exception`** — which escapes the catch block. `result.error(...)` never
+runs, the platform-channel reply is never sent, and the Dart-side render
+future **never completes**. Nanote's renderer serializes every pdfx call
+through one queue, so one wedged render stalls the queue FOREVER — right
+after the first page (rendered while memory was still fresh). Contributing
+factors: 1600px-wide rasters × a 12-entry LRU (~175MB of decoded pixels)
+made the OOM likely on mid-RAM devices, and the v2.5.0 text-extraction
+isolate (whole PDF copied + parsed) competed with renders at exactly the
+wrong moment.
+
+**The fix (replace the fragile parts with stable ones):**
+- **Vendored pdfx fork** (`third_party/pdfx`, wired via
+  `dependency_overrides`): the render coroutine now catches `Throwable` —
+  every failure path delivers the platform reply, so a render can fail but
+  never hang. Also fixed: the unawaited platform-support assert in
+  `PdfDocument.openFile` (its error used to escape as an unhandled async
+  error in the caller's zone).
+- **Memory budget:** max raster width 1600→1440px and LRU 12→8 entries —
+  ~95MB worst-case decoded pixels instead of ~175MB. Same on-screen
+  sharpness at fit-width on 3×-dpr phones.
+- **Watchdog:** every queued pdfx task carries a deadline. A task that
+  blows it has its future completed (callers unblock), the queue is
+  force-reset, and a rate-limited document REOPEN clears any bad native
+  state. `pageImage` awaits with its own timeout, so a stuck future can
+  never freeze a tile.
+- **No permanent page death:** visible-page (priority) requests always get
+  fresh render attempts; a document reopen clears every failure record.
+- **Ref-count correctness:** live images are tracked by unique handles
+  (`key#seq`), so a same-key re-render can never leak the old pixels nor
+  dispose pixels a tile is still painting.
+- **Text extraction delayed 2s** after open — the isolate no longer
+  competes with the first page renders for memory.
+
+**Verification:** 8 new pipeline regression tests (test/
+pdf_render_pipeline_test.dart) drive the REAL controller + REAL tiles
+against a fake that models Android's native semantics exactly — including
+the one-open-page rule and the never-completing OOM wedge ("THE BUG"
+test: watchdog recovers and every page renders afterwards), transient
+failures, zoom re-renders, the pages-manager thumbnail storm, the
+dispose→reopen race, and the 1440px memory cap. Plus 4 workspace-layout
+tests (multi-page stacking, culling, pan clamping) — 25 tests total, all
+green. Same release keystore as 2.5.x — updates install directly.
+
 ## v2.5.2 — Gray-screen fix (release builds)
 
 **The bug:** opening ANY notebook (PDF included) left the screen gray in

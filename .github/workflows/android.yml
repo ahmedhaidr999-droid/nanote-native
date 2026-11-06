@@ -52,7 +52,7 @@ jobs:
       # 3.1.0+1 needs (see android/build.gradle).
 
       - name: Build release APK
-        run: flutter build apk --release --build-name=2.5.2 --build-number=${{ github.run_number }}
+        run: flutter build apk --release --build-name=2.6.0 --build-number=${{ github.run_number }}
 
       - name: Sign APK (when keystore secrets are configured)
         env:

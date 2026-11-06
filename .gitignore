@@ -9,11 +9,13 @@ build/
 
 # The android/ platform folder is COMMITTED (Gradle wrapper + AGP-8
 # namespace injection for isar_flutter_libs). Other platforms are unused.
-ios/
-web/
-linux/
-macos/
-windows/
+# ANCHORED to the repo root so the vendored third_party/pdfx keeps its
+# own platform folders (its plugin declarations reference them).
+/ios/
+/web/
+/linux/
+/macos/
+/windows/
 
 # IDE
 .idea/
