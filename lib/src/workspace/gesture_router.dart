@@ -1274,7 +1274,12 @@ class GestureRouter {
     if (_tool == Tool.text) {
       onTextTap?.call(pageId, pagePoint);
     } else if (_tool == Tool.textSelect) {
-      onTextSelectTap?.call(pageId, pagePoint);
+      // A quick tap with the dedicated text-select tool first tries the
+      // PDF word under it (like every PDF reader); tapping a TEXT ELEMENT
+      // (or empty space) falls through to the classic behavior.
+      if (!_tryPickPdfWordTap(screen)) {
+        onTextSelectTap?.call(pageId, pagePoint);
+      }
     } else if (_tool == Tool.image) {
       onPickImage?.call(pageId, pagePoint);
     } else if (_tool == Tool.sticker) {
@@ -1426,21 +1431,45 @@ class GestureRouter {
 
   void _beginTextSelectionAt(
       int pageId, int pageNumber, Offset screen, int pointer) {
+    if (!_selectPdfWordAt(pageId, pageNumber, screen)) return;
+    // The same pointer keeps extending the selection word by word.
+    _textSelDrag = _PdfSelDrag(
+      pointer: pointer,
+      handle: PdfSelHandle.end,
+      insideTap: false,
+    );
+  }
+
+  /// Quick-tap pick for the dedicated text-select tool: selects the PDF
+  /// word under [screen] (canvas-local). No drag — the pointer is up.
+  bool _tryPickPdfWordTap(Offset screen) {
+    if (!_pdfOpen) return false;
+    final doc = _toDoc(screen);
+    final meta = geometry.pageAt(doc);
+    if (meta == null) return false;
+    final pageNum = _pdfPageNumberOf(meta.id);
+    if (pageNum == null) return false;
+    return _selectPdfWordAt(meta.id, pageNum, screen);
+  }
+
+  /// Shared word pick: resolves the PDF page under [screen], converts to
+  /// view points and selects the nearest word (if any).
+  bool _selectPdfWordAt(int pageId, int pageNumber, Offset screen) {
     final doc = _toDoc(screen);
     final meta = engine.metaOf(pageId);
-    if (meta == null) return;
+    if (meta == null) return false;
     final idx = engine.pages.indexOf(meta);
-    if (idx < 0) return;
+    if (idx < 0) return false;
     final rect = geometry.pageRect(idx);
     final pdfPts = PdfDocumentController.I.pageSize(pageNumber);
-    if (pdfPts == null || pdfPts.width <= 0 || rect.width <= 0) return;
+    if (pdfPts == null || pdfPts.width <= 0 || rect.width <= 0) return false;
     final scale = rect.width / pdfPts.width;
     final pagePoint = geometry.toPage(doc, pageId);
     final viewPoint = Offset(pagePoint.dx / scale, pagePoint.dy / scale);
     final page = PdfTextService.I.page(pageNumber);
-    if (page == null || page.words.isEmpty) return;
+    if (page == null || page.words.isEmpty) return false;
     final hit = PdfTextSelectionController.hitWordInPage(page, viewPoint);
-    if (hit == null) return; // empty area / image → no menu (spec)
+    if (hit == null) return false; // empty area / image → no menu (spec)
     textSel.begin(
       pageId: pageId,
       pageNumber: pageNumber,
@@ -1449,12 +1478,7 @@ class GestureRouter {
       pdfxW: pdfPts.width,
       pdfxH: pdfPts.height,
     );
-    // The same pointer keeps extending the selection word by word.
-    _textSelDrag = _PdfSelDrag(
-      pointer: pointer,
-      handle: PdfSelHandle.end,
-      insideTap: false,
-    );
+    return true;
   }
 
   /// Pointer-down routing for an EXISTING text selection: grab a handle

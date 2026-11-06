@@ -10,6 +10,43 @@ Full feature parity with the Nanote v1.9.1 web app, rebuilt native.
 <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
+## v2.5.1 — PDF text selection: correctness & real-world PDF fixes
+
+v2.5.0 shipped the PDF text-selection engine; this release hardens the
+extractor against the real world (all fixes verified against PyMuPDF
+ground-truth coordinates and covered by `test/pdf_text_extractor_test.dart`):
+
+1. **Word boxes were ~fontSize× too wide** — the glyph quad passed the
+   USER-space advance through the text rendering matrix, which scales by
+   the font size again. Selection rectangles, hit-testing and highlight
+   strokes now land exactly on the visible text ("The" at 14pt Helvetica:
+   24.1pt — was 112pt).
+2. **Standard fonts without /Widths fell back to 500 for every glyph** —
+   built-in Adobe AFM metrics for the 14 standard fonts (plus
+   metric-compatible aliases Arial/Times New Roman/Courier New and
+   subset prefixes like `ABCDEF+Helvetica`) now drive the advances, so
+   the very common non-embedded Helvetica/Times/Courier PDFs extract
+   with exact positions.
+3. **Form XObjects were not recursed** — Chrome print-to-PDF,
+   wkhtmltopdf, Word exports and similar generators wrap the page text
+   inside `/Fx Do` forms (with their own resources and matrices).
+   Without recursion NO text was found on such pages. Forms are now
+   interpreted with their /Matrix composed into the CTM and their own
+   /Resources overlaid, with cycle/depth guards.
+4. **Tc/Tw/Tz followed the spec formula** — `Tx = ((w0/1000)×Tfs +
+   Tc + Tw)×Th`: char/word spacing are no longer divided by 1000, and
+   horizontal scaling applies to the whole displacement (verified
+   against kerned/spacing-heavy content streams).
+5. **Shaped Arabic normalizes to base letters** — presentation forms
+   (Arabic Presentation Forms-A/B) map back to their base letters, with
+   lam-alef ligature expansion aware of visual vs logical storage, so
+   copied/translated/searched text reads `اختبار`, not `ﺧﺘﺒﺎﺭ`.
+6. **RTL word order follows the storage mode** — visual (shaped)
+   lines reverse to the logical sentence on copy; naive unshaped lines
+   keep their left-to-right logical order. Verified end-to-end: classic
+   arabic-reshaper/bidi PDFs, logical per-glyph (Chrome/Word-style)
+   PDFs and plain logical strings all copy as the author wrote them.
+
 ## v2.5.0 — PDF text selection + true-highlighter rendering
 
 **Long-press any text in a PDF to select it.** Nanote now ships its own

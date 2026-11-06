@@ -300,7 +300,9 @@ class PdfTextSelectionController extends ChangeNotifier {
     return bestDist <= tol * tol ? best : null;
   }
 
-  /// Selected text in LOGICAL reading order (RTL lines reversed).
+  /// Selected text in LOGICAL reading order. RTL lines with a visual word
+  /// arrangement (the normally-rendered case) are reversed word by word;
+  /// naive unshaped lines keep their left-to-right logical order.
   String selectedText() {
     final r = range;
     final p = _page;
@@ -313,7 +315,7 @@ class PdfTextSelectionController extends ChangeNotifier {
       final words = [
         for (var i = a; i <= b; i++) p.words[i].text,
       ];
-      if (line.rtl) {
+      if (line.rtl && line.visualOrder) {
         for (var i = 0, j = words.length - 1; i < j; i++, j--) {
           final t = words[i];
           words[i] = words[j];
