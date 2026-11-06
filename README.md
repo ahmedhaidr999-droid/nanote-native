@@ -10,6 +10,25 @@ Full feature parity with the Nanote v1.9.1 web app, rebuilt native.
 <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
+## v2.5.2 — Gray-screen fix (release builds)
+
+**The bug:** opening ANY notebook (PDF included) left the screen gray in
+release builds. `tool_rail.dart`'s `_verticalBody` wrapped its
+`SingleChildScrollView` in a `Flexible` — but since v2.4.0 the capsule
+lives under `Align > SafeArea > Container` with **no Flex ancestor**.
+`Flexible.applyParentData` does an unchecked `as FlexParentData` cast,
+which throws `BoxParentData is not a subtype of FlexParentData` on EVERY
+workspace build in release mode (debug-only asserts hide it). The repeated
+build exception replaced the workspace with Flutter's gray release
+ErrorWidget.
+
+**The fix:** a height-capped `ConstrainedBox` (viewport minus chrome) —
+identical scrolling behavior, no Flex parent needed. Verified on an
+Android emulator with a release APK: 0 errors; the PDF page and tool rail
+render correctly. CI now signs releases with the permanent
+`nanote-release.keystore` (same key as v2.5.1-signed — updates install
+over it directly).
+
 ## v2.5.1 — PDF text selection: correctness & real-world PDF fixes
 
 v2.5.0 shipped the PDF text-selection engine; this release hardens the
