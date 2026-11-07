@@ -28,10 +28,23 @@ class S {
     return _en[key] ?? key;
   }
 
-  static const _arDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+  static const List<String> _arDigits = [
+    '٠',
+    '١',
+    '٢',
+    '٣',
+    '٤',
+    '٥',
+    '٦',
+    '٧',
+    '٨',
+    '٩',
+  ];
 
   /// Latin digits by default; Hindi (٠١٢٣) only when the setting is on.
   static String num(dynamic n) {
+    // dynamic.toString() is statically typed String by the language spec —
+    // no cast needed (strict-casts is satisfied).
     final s = n.toString();
     if (!isAr || !hindiDigits) return s;
     return String.fromCharCodes(

@@ -89,6 +89,10 @@ class ElementsPainter extends CustomPainter {
     );
     tp.layout(maxWidth: math.max(1.0, el.w));
     tp.paint(canvas, Offset(el.x, el.y));
+    // BUG FIX (port): dispose the TextPainter — every call lays out a fresh
+    // native ui.Paragraph; painters run per frame (and per element), so
+    // never disposing leaked paragraphs until GC finalizers caught up.
+    tp.dispose();
   }
 
   // ------------------------------------------------------------------ shape

@@ -146,10 +146,14 @@ class ExportService {
     }
 
     final picture = recorder.endRecording();
-    return picture.toImage(
+    final image = await picture.toImage(
       (size.width * scale).round(),
       (size.height * scale).round(),
     );
+    // toImage() rasterizes from its own reference; release the Dart-side
+    // picture so its native display list is not held until the next GC.
+    picture.dispose();
+    return image;
   }
 
   /// Decodes every image element of the page so the content painter finds
@@ -160,14 +164,17 @@ class ExportService {
         if (AppImageCache.peekSync(el.src!) != null) continue;
         try {
           await AppImageCache.loadByRel(el.src!);
-        } catch (_) {
-          // Broken image: the painter will simply skip it.
+        } catch (e, st) {
+          // Broken image: the painter will simply skip it — but leave a
+          // trace so a missing file is debuggable.
+          debugPrint('ExportService: image "${el.src}" failed to load: '
+              '$e\n$st');
         }
       }
     }
   }
 
-  /// Best-effort PDF background for imported-PDF notebooks: the pdfx page
+  /// Best-effort PDF background for imported-PDF notebooks: the pdfrx page
   /// image (from PdfDocumentController), drawn under the ink. Skips silently
   /// when unavailable.
   static Future<ui.Image?> _pdfBackground(
@@ -186,7 +193,9 @@ class ExportService {
       if (index < 0 || index + 1 > ctrl.pageCount) return null;
       final bmp = await ctrl.pageImage(index + 1, 2.0);
       return bmp?.image;
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('ExportService: PDF background unavailable for page '
+          '${page.id}: $e\n$st');
       return null;
     }
   }

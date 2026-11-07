@@ -263,7 +263,10 @@ class GestureRouter {
       if (_draw != null && !_draw!.stylus) {
         final keep = _draw!;
         _cancelDraw();
-        _pointers[e.pointer] = _Ptr(e.pointer, kind);
+        // BUG FIX (port): seed lastPos with the DOWN position — a _Ptr born
+        // at (0,0) that never moved would poison a later pinch focal.
+        _pointers[e.pointer] = _Ptr(e.pointer, kind)
+          ..lastPos = e.localPosition;
         _startPinchFromDraw(keep, e);
         return;
       }
@@ -273,7 +276,13 @@ class GestureRouter {
 
       final activeTouches =
           _pointers.values.where((p) => p.kind == PointerDeviceKind.touch && !p.rejected).length;
-      _pointers[e.pointer] = _Ptr(e.pointer, kind);
+      // BUG FIX (port): seed lastPos with the DOWN position. Previously it
+      // stayed Offset.zero until the first move, so a second finger landing
+      // before the first one moved (simultaneous two-finger touch — exactly
+      // the two-finger-tap gesture) made _startPinch compute a bogus focal
+      // at the canvas origin, jumping the viewport on the first move.
+      _pointers[e.pointer] = _Ptr(e.pointer, kind)
+        ..lastPos = e.localPosition;
 
       if (activeTouches == 0) {
         // First finger.
@@ -517,6 +526,12 @@ class GestureRouter {
     if (_selGesture != null && _selGesture!.pointer == e.pointer) _cancelSelGesture();
     if (_shapeDrag != null && _shapeDrag!.pointer == e.pointer) {
       _cancelShapeDrag();
+    }
+    // BUG FIX (port): a cancelled ruler drag left _rulerDrag (and the
+    // ruler's internal _dragOffset) stuck on the dead pointer id — every
+    // other gesture is cleaned up here, this one was missed.
+    if (_rulerDrag != null && _rulerDrag!.pointer == e.pointer) {
+      _rulerDrag = null;
     }
     if (_pinch != null && (e.pointer == _pinch!.a || e.pointer == _pinch!.b)) {
       _endPinch(e.pointer);
@@ -1049,8 +1064,27 @@ class GestureRouter {
     shapePreview.value = null;
     if (el == null) return;
     // Discard degenerate drags (a tap, not a drag).
-    if ((d.last - d.start).distance < 4) return;
+    // BUG FIX (port): freeform measures the TRAVELED path length — the old
+    // straight start→end test silently dropped every CLOSED freeform loop
+    // (a drawn circle ends within a few px of its start).
+    final degenerate = el.type == ShapeType.freeform
+        ? _freeformTravel(d) < 4
+        : (d.last - d.start).distance < 4;
+    if (degenerate) return;
     engine.addElement(d.pageId, el);
+  }
+
+  /// Total traveled length of a freeform drag (start → … → last). The
+  /// [d.freePts] trail is sampled on moves (≥3px apart); the current point
+  /// lives in [d.last] and is not part of the trail.
+  double _freeformTravel(_ShapeDrag d) {
+    var len = 0.0;
+    var prev = d.start;
+    for (final p in d.freePts.skip(1)) {
+      len += (p - prev).distance;
+      prev = p;
+    }
+    return len + (d.last - prev).distance;
   }
 
   void _cancelShapeDrag() {

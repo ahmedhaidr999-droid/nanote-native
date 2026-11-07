@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
-import 'package:pdfx/pdfx.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 import '../i18n/strings.dart';
 import '../models/library_models.dart';
@@ -237,19 +237,18 @@ class LibraryController extends ChangeNotifier {
       relPath = await FileStore.importFile(pdfFile, 'pdfs');
       final abs = await FileStore.resolve(relPath);
       final doc = await PdfDocument.openFile(abs.path);
-      final count = doc.pagesCount;
+      final count = doc.pages.length;
       // Pick the page orientation from the first page when possible.
       var pageSize = PageSizeId.a4Portrait.index;
       try {
-        final first = await doc.getPage(1);
+        final first = doc.pages.first;
         final w = first.width;
         final h = first.height;
-        await first.close();
         if (w > h) pageSize = PageSizeId.a4Landscape.index;
       } catch (_) {
         // Keep the portrait default.
       }
-      await doc.close();
+      doc.dispose();
 
       var title = p.basenameWithoutExtension(pdfFile.path);
       if (title.isEmpty) title = 'PDF';

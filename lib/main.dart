@@ -18,7 +18,9 @@ import 'src/workspace/document_workspace.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Local-first storage: one Isar instance for all schemas.
+  // Local-first storage: one Drift (SQLite) database for all tables. On the
+  // very first launch this also performs the one-time migration of legacy
+  // Isar data (v2.x app) into Drift — see persistence/migration/.
   await AppDb.init();
 
   // Settings + language before the first frame.

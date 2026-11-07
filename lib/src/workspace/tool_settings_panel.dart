@@ -1111,7 +1111,10 @@ class _ColorSectionState extends State<_ColorSection> {
                             size: 14, color: nanoteColors(context).mutedFg),
                         Expanded(
                           child: Slider(
-                            value: _hsv.value,
+                            // Clamped: a persisted/legacy current color darker
+                            // than HSV value 0.15 would otherwise trip the
+                            // Slider "value >= min" assertion.
+                            value: _hsv.value.clamp(0.15, 1.0).toDouble(),
                             min: 0.15,
                             max: 1,
                             onChanged: (v) => _setWheel(
@@ -1257,7 +1260,6 @@ class _ClearPageButtonState extends State<_ClearPageButton> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final cs = nanoteColors(context);
     return SizedBox(
       width: double.infinity,
       height: 40,

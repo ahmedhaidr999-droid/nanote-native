@@ -372,7 +372,10 @@ class _ColorSheetState extends State<_ColorSheet> {
                   const SizedBox(width: 4),
                   Expanded(
                     child: Slider(
-                      value: _hsv.value,
+                      // Clamped: the sheet is seeded with the CURRENT tool
+                      // color — a dark legacy color (HSV value < 0.15) would
+                      // otherwise trip the Slider "value >= min" assertion.
+                      value: _hsv.value.clamp(0.15, 1.0).toDouble(),
                       min: 0.15,
                       max: 1,
                       onChanged: (v) => _setWheel(

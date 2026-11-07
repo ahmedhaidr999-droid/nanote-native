@@ -88,9 +88,10 @@ class _CreateNotebookViewState extends State<CreateNotebookView> {
   }
 
   Future<void> _pickCoverImage() async {
-    final res = await FilePicker.platform.pickFiles(type: FileType.image);
-    final files = res?.files;
-    final path = (files != null && files.isNotEmpty) ? files.first.path : null;
+    // v1.0.0: file_picker 13 removed `FilePicker.platform` — pickFiles is
+    // now static and returns a non-null list (empty when the user cancels).
+    final files = await FilePicker.pickFiles(type: FileType.image);
+    final path = files.isNotEmpty ? files.first.path : null;
     if (path == null) return;
     final rel = await FileStore.importFile(File(path), 'covers');
     if (!mounted) return;
@@ -292,10 +293,10 @@ class _CreateNotebookViewState extends State<CreateNotebookView> {
           controller: _name,
           decoration: InputDecoration(hintText: S.t('nameHint')),
           style: nanoteText(const TextStyle(fontSize: 15)),
-          onChanged: (_) {
-            final v = _canCreate;
-            if (v != _valid) setState(() => _valid = v);
-          },
+          // Rebuild on EVERY keystroke — the live cover preview shows the
+          // name as typed (only rebuilding on validity flips froze the
+          // preview after the first character).
+          onChanged: (_) => setState(() => _valid = _canCreate),
         ),
       ]),
       _section(context, S.t('covers'), [

@@ -1,68 +1,15 @@
 name: nanote_native
-description: "Nanote Native — local-first handwriting notes app (Flutter, Android)."
+description: "Nanote Native — local-first handwriting notes app (Flutter, Android). Clean v1.0.0 rebuild."
 publish_to: "none"
-version: 2.6.0+1
+version: 1.0.0+1
 
 environment:
-  sdk: ">=3.5.0 <4.0.0"
+  sdk: ">=3.13.0 <4.0.0"
 
-dependencies:
-  flutter:
-    sdk: flutter
-
-  # Ink engine — pressure-tapered stroke outlines.
-  perfect_freehand: ^2.5.2
-
-  # Local-first database.
-  isar: 3.1.0+1
-  isar_flutter_libs: 3.1.0+1
-
-  # Files.
-  path_provider: ^2.1.5
-  path: ^1.9.0
-  vector_math: ^2.1.4
-
-  # Pickers / sharing / links.
-  file_picker: ^8.1.6
-  share_plus: ^10.1.2
-  url_launcher: ^6.3.1
-
-  # Audio notes: record (AAC/m4a) + playback.
-  record: ^6.2.1
-  audioplayers: ^6.6.0
-
-  # PDF import (rendering only — no text layer on pdfx).
-  pdfx: ^2.11.0
-
-  # PDF export.
-  pdf: ^3.11.3
-
-  # Lucide icon set (v1.9.1 design spec: Lucide icons exclusively).
-  flutter_lucide: ^1.68.0
-
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
-  flutter_lints: ^4.0.0
-  build_runner: 2.4.13
-  isar_generator: 3.1.0+1
-
-# pdfx 2.11 vendors an InteractiveViewer that calls Matrix4.translateByDouble/
-# scaleByDouble, added in vector_math 2.2.0 (Flutter 3.29 pins 2.1.4).
-#
-# PDFX VENDORED FORK (v2.6.0 "gray pages 2+" fix): third_party/pdfx is
-# pdfx 2.11.0 with ONE critical Android native fix — the renderPage
-# coroutine catches Throwable (not just Exception), so an OutOfMemoryError
-# during Bitmap.createBitmap always delivers the platform reply instead of
-# wedging the Dart render future forever ("only page 1 renders").
-dependency_overrides:
-  pdfx:
-    path: third_party/pdfx
-  vector_math: 2.2.0
+# Material icon font — Flutter widgets reference Material icons internally.
+uses-material-design: true
 
 flutter:
-  uses-material-design: true
-
   assets:
     - assets/fonts/
 
@@ -90,3 +37,62 @@ flutter:
           weight: 600
         - asset: assets/fonts/NotoSansArabic-Bold.ttf
           weight: 700
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ── Ink engine ──────────────────────────────────────────────────────────
+  # Pressure-tapered stroke outlines (perfect-freehand). Proven, pure Dart.
+  perfect_freehand: ^2.5.2
+
+  # ── Database ────────────────────────────────────────────────────────────
+  # Drift (SQLite): actively maintained, type-safe, migrations. Replaces the
+  # abandoned Isar 3.1 (which pinned the toolchain to Flutter 3.29).
+  drift: ^2.35.2
+  sqlite3_flutter_libs: ^0.5.28
+
+  # ── Legacy migration ONLY ───────────────────────────────────────────────
+  # Reads the old on-device Isar database once at first launch, then never
+  # again (see lib/src/persistence/migration/). isar 3.1.0+1 is null-safe
+  # (>=2.17) so it resolves on Dart 3 in language-mode 2.17.
+  isar: 3.1.0+1
+  isar_flutter_libs: 3.1.0+1
+
+  # ── Files ───────────────────────────────────────────────────────────────
+  path_provider: ^2.1.6
+  path: ^1.9.0
+  vector_math: ^2.1.4
+
+  # ── PDF engine ──────────────────────────────────────────────────────────
+  # pdfrx — built on pdfium (Google's Chrome PDF engine): the most stable
+  # rendering + native text extraction. Replaces pdfx and the 2.8k-line
+  # custom pure-Dart text extractor.
+  pdfrx: ^2.12.0
+
+  # ── PDF export ──────────────────────────────────────────────────────────
+  pdf: ^3.13.1
+
+  # ── Pickers / sharing / links ───────────────────────────────────────────
+  file_picker: ^13.3.2
+  share_plus: ^13.3.1
+  url_launcher: ^6.3.3
+
+  # ── Audio notes: record (AAC/m4a) + playback ────────────────────────────
+  record: ^7.1.2
+  audioplayers: ^6.8.1
+
+  # ── Icons (v1.9.1 design spec: Lucide exclusively) ─────────────────────
+  flutter_lucide: ^1.70.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  drift_dev: ^2.35.2
+  build_runner: ^2.17.1
+
+# No dependency_overrides. No vendored forks. The v1.0.0 engine set:
+#   pdfx (+ custom text parser)  →  pdfrx  (pdfium)
+#   Isar 3.1 (abandoned)         →  Drift  (SQLite, maintained)
+#   Flutter 3.29 pin             →  Flutter 3.47 stable

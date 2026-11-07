@@ -105,12 +105,13 @@ class _LibraryViewState extends State<LibraryView> {
   Future<void> _importPdf() async {
     final c = LibraryController.I;
     final messenger = ScaffoldMessenger.of(context);
-    final res = await FilePicker.platform.pickFiles(
+    // v1.0.0: file_picker 13 removed `FilePicker.platform` — pickFiles is
+    // now static and returns a non-null list (empty when the user cancels).
+    final files = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['pdf'],
     );
-    final files = res?.files;
-    final path = (files != null && files.isNotEmpty) ? files.first.path : null;
+    final path = files.isNotEmpty ? files.first.path : null;
     if (path == null || !mounted) return;
     messenger.showSnackBar(SnackBar(content: Text(S.t('importingPdf'))));
     final nb = await c.importPdf(File(path));

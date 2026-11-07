@@ -38,7 +38,8 @@ class _SettingsViewState extends State<SettingsView> {
         messenger.showSnackBar(
             SnackBar(content: Text(S.t('backupFailed'))));
       }
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('SettingsView: create backup failed: $e\n$st');
       if (mounted) {
         messenger.showSnackBar(
             SnackBar(content: Text(S.t('backupFailed'))));
@@ -66,20 +67,30 @@ class _SettingsViewState extends State<SettingsView> {
       ),
     );
     if (ok != true || !mounted) return;
-    final res = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['nanote'],
-    );
-    final files = res?.files;
-    final path = (files != null && files.isNotEmpty) ? files.first.path : null;
-    if (path == null || !mounted) return;
-    final success = await BackupService.restoreBackup(File(path));
-    if (!mounted) return;
-    messenger.showSnackBar(SnackBar(
-        content:
-            Text(success ? S.t('restoreDone') : S.t('restoreFailed'))));
-    if (success) {
-      Navigator.pushNamedAndRemoveUntil(context, '/', (r) => false);
+    try {
+      // v1.0.0: file_picker 13 — static pickFiles, non-null list.
+      final files = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['nanote'],
+      );
+      final path = files.isNotEmpty ? files.first.path : null;
+      if (path == null || !mounted) return;
+      final success = await BackupService.restoreBackup(File(path));
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(
+          content:
+              Text(success ? S.t('restoreDone') : S.t('restoreFailed'))));
+      if (success) {
+        Navigator.pushNamedAndRemoveUntil(context, '/', (r) => false);
+      }
+    } catch (e, st) {
+      // Picker/IO failures must not surface as unhandled async errors —
+      // mirror the create-backup path (snackbar + logged stack).
+      debugPrint('SettingsView: restore backup failed: $e\n$st');
+      if (mounted) {
+        messenger.showSnackBar(
+            SnackBar(content: Text(S.t('restoreFailed'))));
+      }
     }
   }
 
@@ -94,7 +105,8 @@ class _SettingsViewState extends State<SettingsView> {
         messenger.showSnackBar(
             SnackBar(content: Text(S.t('updateCheckFailed'))));
       }
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('SettingsView: update check failed: $e\n$st');
       if (mounted) {
         messenger.showSnackBar(
             SnackBar(content: Text(S.t('updateCheckFailed'))));
@@ -413,7 +425,7 @@ class _SettingsViewState extends State<SettingsView> {
                   _valueRow(
                     context,
                     title: S.t('version'),
-                    value: '2.2.0',
+                    value: '1.0.0',
                   ),
                   _divider(),
                   _linkRow(

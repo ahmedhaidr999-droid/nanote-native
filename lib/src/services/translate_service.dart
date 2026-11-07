@@ -72,7 +72,7 @@ class TranslateService {
         'q': text,
         'langpair': '$source|$target',
       });
-      final body = await _httpGet(uri).timeout(const Duration(seconds: 10));
+      final body = await _httpGet(uri);
       if (body == null) return null;
       final data = jsonDecode(body);
       if (data is! Map) return null;
@@ -86,7 +86,10 @@ class TranslateService {
         return null;
       }
       return TranslateResult(_decodeEntities(raw), false, 1);
-    } catch (_) {
+    } catch (e, st) {
+      // Expected to fail offline — log the reason, then let the caller
+      // fall back to the offline dictionary.
+      debugPrint('TranslateService: online translate failed: $e\n$st');
       return null;
     }
   }
@@ -94,13 +97,22 @@ class TranslateService {
   static Future<String?> _httpGet(Uri uri) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
     try {
-      final request = await client.getUrl(uri);
-      final response = await request.close();
-      if (response.statusCode != 200) return null;
-      return await response.transform(utf8.decoder).join();
+      // The deadline lives INSIDE this method (not on the caller's side):
+      // an outer .timeout() merely abandons this future, so a server that
+      // stalls mid-body would keep the socket and the client alive forever
+      // (connectionTimeout only bounds the connect phase). Here the finally
+      // below always runs and force-closes whatever is left.
+      return await _readBody(client, uri).timeout(const Duration(seconds: 10));
     } finally {
-      client.close();
+      client.close(force: true);
     }
+  }
+
+  static Future<String?> _readBody(HttpClient client, Uri uri) async {
+    final request = await client.getUrl(uri);
+    final response = await request.close();
+    if (response.statusCode != 200) return null;
+    return await response.transform(utf8.decoder).join();
   }
 
   /// Replaces the common HTML entities MyMemory returns.
@@ -747,7 +759,8 @@ class TranslateService {
     }
     try {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('TranslateService: Ask-AI launch failed for $uri: $e\n$st');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(S.t('error'))),

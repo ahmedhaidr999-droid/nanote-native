@@ -52,15 +52,21 @@ class _StickerManagerViewState extends State<StickerManagerView> {
   }
 
   Future<void> _import() async {
-    final res = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['png'],
-    );
-    final files = res?.files;
-    final path = (files != null && files.isNotEmpty) ? files.first.path : null;
-    if (path == null) return;
-    await FileStore.importFile(File(path), 'stickers');
-    await _reload();
+    try {
+      // v1.0.0: file_picker 13 — static pickFiles, non-null list.
+      final files = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['png'],
+      );
+      final path = files.isNotEmpty ? files.first.path : null;
+      if (path == null) return;
+      await FileStore.importFile(File(path), 'stickers');
+      await _reload();
+    } catch (e, st) {
+      // Picker / copy failures (unreadable source, storage full) must not
+      // surface as unhandled async errors — log and keep the old grid.
+      debugPrint('StickerManagerView: import failed: $e\n$st');
+    }
   }
 
   Future<void> _delete(String rel) async {

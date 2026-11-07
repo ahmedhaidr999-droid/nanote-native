@@ -5,6 +5,7 @@ import '../controllers/settings_controller.dart';
 import '../controllers/stroke_engine.dart';
 import '../models/settings.dart';
 import '../persistence/app_db.dart';
+import '../persistence/entities.dart';
 import '../persistence/file_store.dart';
 import '../persistence/library_repository.dart';
 import '../persistence/stroke_repository.dart';
@@ -12,7 +13,8 @@ import '../persistence/stroke_repository.dart';
 /// Single-file `.nanote` backup: one JSON document containing the settings,
 /// every library entity, every ink/element row and every stored file
 /// (base64). Restore wipes the database + files and reinserts everything
-/// PRESERVING the numeric Isar ids (page ids are the ink slots!).
+/// PRESERVING the numeric row ids (page ids are the ink slots!). Format is
+/// byte-compatible with the v2.x app — backups flow in both directions.
 class BackupService {
   BackupService._();
 
@@ -127,7 +129,7 @@ class BackupService {
       final files = _asMap(doc['files']);
 
       // Wipe the database and every stored file.
-      await AppDb.wipeAll();
+      await AppDb.db.wipeAll();
       try {
         for (final rel in await FileStore.listAllFiles()) {
           await FileStore.deleteRelative(rel);

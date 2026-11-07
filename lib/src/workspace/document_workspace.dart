@@ -138,8 +138,19 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
     final pdfPath = engine.notebook?.pdfPath;
     if (pdfPath != null) {
       final f = await FileStore.tryResolve(pdfPath);
+      // RACE GUARD: if this workspace was disposed while the path resolved
+      // (user popped and opened another notebook), the shared PDF
+      // controller now belongs to the NEW workspace — opening here would
+      // race and clobber its document.
+      if (!mounted) return;
       if (f != null) {
         final ok = await PdfDocumentController.I.open(f.path);
+        // RACE GUARD: same race one await later. Without this check a
+        // disposed workspace could call syncPagesToPdfCount on the
+        // SINGLETON engine while a newer workspace has already opened a
+        // different notebook — corrupting the new notebook's page list
+        // to this PDF's page count.
+        if (!mounted) return;
         // SELF-HEAL: a PDF notebook must own one page per PDF page. Older
         // notebooks (single-page import era) show only page 1 otherwise.
         if (ok) {
@@ -412,8 +423,10 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
   /// read dimensions → insert an ImageEl centered at the tap point.
   Future<void> _onPickImage(int pageId, Offset pagePoint) async {
     try {
-      final result = await FilePicker.platform.pickFiles(type: FileType.image);
-      final path = result?.files.single.path;
+      // v1.0.0: file_picker 13 — pickFiles is static, returns a non-null
+      // list (empty when the user cancels).
+      final result = await FilePicker.pickFiles(type: FileType.image);
+      final path = result.isNotEmpty ? result.first.path : null;
       if (path == null || !mounted) return;
       final rel = await FileStore.importFile(File(path), 'images');
       final absFile = await FileStore.resolve(rel);
@@ -909,7 +922,7 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
           if (pdfOpen)
             PdfPageTile(
               pdf: pdf,
-              pageNumber: index + 1, // pdfx page numbers are 1-based
+              pageNumber: index + 1, // pdfrx page numbers are 1-based
               scale: viewport.scale,
               viewport: viewport,
               pageSize: rect.size,
@@ -1223,7 +1236,14 @@ class _DocumentWorkspaceState extends State<DocumentWorkspace> {
           rect: rect,
           child: CustomPaint(
             size: rect.size,
-            painter: _ShapePreviewPainter(preview: pv),
+            // PAD FIX: the committed element is painted translated by the
+            // page's §2 pad offset (see PageContentPainter) — the live
+            // preview must use the SAME pad or it renders offset from
+            // where the shape actually lands on grown pages.
+            painter: _ShapePreviewPainter(
+              preview: pv,
+              pad: StrokeEngine.I.padOffsetOf(pv.pageId),
+            ),
           ),
         );
       },
@@ -1616,15 +1636,21 @@ class _CropOverlayPainter extends CustomPainter {
     final w = session.window;
 
     canvas.save();
+    // PAD FIX (§2): the window/handles are element-local PAGE coords, but
+    // the image itself is painted translated by the page's pad offset (see
+    // elements_painter) and the router hit-tests in the same anchor-relative
+    // frame — translate by the pad so the crop UI lands on the image.
+    canvas.translate(pad.dx, pad.dy);
     // Rotate into the element's frame so the window follows the image.
     final c = el.center;
     canvas.translate(c.dx, c.dy);
     canvas.rotate(el.rotation);
     canvas.translate(-c.dx, -c.dy);
 
-    // Dim everything outside the crop window (even-odd fill).
+    // Dim everything outside the crop window (even-odd fill). The page-local
+    // widget spans from -pad to size-pad, so start the dim rect at -pad.
     final dimPath = Path()
-      ..addRect(Offset.zero & size)
+      ..addRect(Rect.fromLTWH(-pad.dx, -pad.dy, size.width, size.height))
       ..addRect(w)
       ..fillType = PathFillType.evenOdd;
     canvas.drawPath(dimPath, Paint()..color = const Color(0x8A0F172A));
@@ -1665,4 +1691,3 @@ class _CropOverlayPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _CropOverlayPainter oldDelegate) => true;
 }
-

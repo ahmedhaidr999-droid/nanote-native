@@ -1,4 +1,4 @@
-/// App settings + electronic-pen shortcut bindings (20 actions).
+/// App settings + electronic-pen shortcut bindings (21 actions).
 ///
 /// Everything serializes to JSON (settings_store.dart).
 

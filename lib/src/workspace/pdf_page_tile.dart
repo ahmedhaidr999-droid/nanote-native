@@ -204,7 +204,7 @@ class _PdfTilePainter extends CustomPainter {
       canvas.drawRRect(
         r,
         Paint()
-          ..color = const Color(0x140EA5E9)
+          ..color = const Color(0x141E6FF2)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1,
       );

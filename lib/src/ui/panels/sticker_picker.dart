@@ -58,11 +58,19 @@ class _StickerPicker extends StatefulWidget {
 class _StickerPickerState extends State<_StickerPicker> {
   late Future<List<String>> _stickers;
 
+  /// Resolved sticker files by relative path — memoized so the per-cell
+  /// FutureBuilder does NOT re-run FileStore.tryResolve (file IO) on every
+  /// rebuild, which used to flash the missing-image placeholder.
+  final Map<String, Future<File?>> _resolved = {};
+
   @override
   void initState() {
     super.initState();
     _stickers = FileStore.listStickers();
   }
+
+  Future<File?> _resolve(String rel) =>
+      _resolved.putIfAbsent(rel, () => FileStore.tryResolve(rel));
 
   void _insert({String? builtinId, String? src}) {
     widget.engine.addElement(
@@ -82,11 +90,12 @@ class _StickerPickerState extends State<_StickerPicker> {
   }
 
   Future<void> _import() async {
-    final result = await FilePicker.platform.pickFiles(
+    // v1.0.0: file_picker 13 — static pickFiles, non-null list.
+    final result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['png'],
     );
-    final path = result?.files.single.path;
+    final path = result.isNotEmpty ? result.first.path : null;
     if (path == null) return;
     try {
       await FileStore.importFile(File(path), 'stickers');
@@ -181,7 +190,7 @@ class _StickerPickerState extends State<_StickerPicker> {
   Widget _userCell(BuildContext context, String rel, NanoteColors cs) {
     final scheme = Theme.of(context).colorScheme;
     return FutureBuilder<File?>(
-      future: FileStore.tryResolve(rel),
+      future: _resolve(rel),
       builder: (context, snapshot) {
         final file = snapshot.data;
         return Pressable(

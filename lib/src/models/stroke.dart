@@ -377,7 +377,10 @@ class Stroke {
     final out = Stroke(
       id: id,
       z: z,
-      style: style,
+      // Copy the style: sharing the mutable instance would let edits to the
+      // transformed stroke (e.g. width rescale during a selection transform)
+      // silently mutate the source stroke — deepCopy() already isolates it.
+      style: style.copyWith(),
       tStart: tStart,
       tEnd: tEnd,
       groupId: groupId,

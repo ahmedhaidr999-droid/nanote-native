@@ -308,9 +308,15 @@ class _PagesSheetState extends State<_PagesSheet> {
                         childAspectRatio: 0.72,
                       ),
                       itemCount: pages.length + 1,
+                      // The cells are keyed by PAGE ID (not grid slot):
+                      // without the key, the builder reuses the element at
+                      // each slot after a reorder/delete/duplicate, so the
+                      // stateful thumbnail kept painting the previous slot's
+                      // PDF background for the page now occupying it.
                       itemBuilder: (context, i) => i == pages.length
                           ? _AddPageCell(onTap: () => unawaited(_addPage()))
                           : _PageCell(
+                              key: ValueKey(pages[i].id),
                               engine: widget.engine,
                               meta: pages[i],
                               index: i,
@@ -546,6 +552,7 @@ class _DashedRRectPainter extends CustomPainter {
 /// selection overlay.
 class _PageCell extends StatefulWidget {
   const _PageCell({
+    super.key,
     required this.engine,
     required this.meta,
     required this.index,

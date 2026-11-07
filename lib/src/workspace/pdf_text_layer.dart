@@ -1,21 +1,86 @@
-import 'dart:io';
-import 'dart:isolate';
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 import '../controllers/settings_controller.dart';
 import '../controllers/stroke_engine.dart';
 import '../controllers/tool_controller.dart';
 import '../models/stroke.dart';
-import '../services/pdf_text_extractor.dart';
+
+// ---------------------------------------------------------------------------
+// Extracted text model (view space: rotated page points, origin TOP-LEFT,
+// y down — the exact space the raster tile occupies).
+// ---------------------------------------------------------------------------
+
+/// One selectable word in view coordinates.
+class PdfTWord {
+  final String text;
+  final double x, y, w, h;
+  final bool rtl;
+
+  const PdfTWord(this.text, this.x, this.y, this.w, this.h, this.rtl);
+}
+
+/// One text line: the word index range [start, end] (inclusive), the
+/// baseline segment A→B (view points) and the union rect.
+class PdfTLine {
+  final int start, end;
+  final double ax, ay, bx, by; // baseline A→B (view points)
+  final double x, y, w, h;
+  final bool rtl;
+
+  /// True when the line's words sit in VISUAL order (correctly rendered
+  /// RTL: the first logical word is the rightmost) — copying must reverse
+  /// the word order to restore the logical sentence. False for logical
+  /// storage, which keeps its order as stored.
+  final bool visualOrder;
+
+  const PdfTLine(this.start, this.end, this.ax, this.ay, this.bx, this.by,
+      this.x, this.y, this.w, this.h, this.rtl, this.visualOrder);
+}
+
+/// Extracted text of one page (empty when the page has no extractable
+/// text — scanned pages, images, encrypted files).
+class PdfTextPage {
+  final List<PdfTWord> words;
+  final List<PdfTLine> lines;
+
+  /// The view size (points) the coordinates above are relative to — used
+  /// to normalize against the renderer's reported page size.
+  final double viewW, viewH;
+
+  static const PdfTextPage empty = PdfTextPage(const [], const [], 1, 1);
+
+  const PdfTextPage(this.words, this.lines, this.viewW, this.viewH);
+}
+
+bool _isRtlText(String s) {
+  var rtl = 0, ltr = 0;
+  for (final r in s.runes) {
+    if ((r >= 0x0590 && r <= 0x08FF) ||
+        (r >= 0xFB50 && r <= 0xFDFF) ||
+        (r >= 0xFE70 && r <= 0xFEFF)) {
+      rtl++;
+    } else if ((r >= 0x41 && r <= 0x5A) || (r >= 0x61 && r <= 0x7A)) {
+      ltr++;
+    }
+  }
+  return rtl > ltr;
+}
+
+// ---------------------------------------------------------------------------
+// Text service — pdfrx (pdfium) extraction
+// ---------------------------------------------------------------------------
 
 /// Background text extraction for the currently open PDF.
 ///
-/// Extraction runs ONCE per document inside an isolate (the whole parse —
-/// xref, fonts, content streams of every page) and the resulting word
-/// boxes are cached in plain maps, so hit-testing, "select all" and page
-/// switches are instant afterwards.
+/// v1.0.0: extraction is done by **pdfium** itself (`PdfPage.loadStructuredText`)
+/// — the same engine that renders the page — running on pdfrx's background
+/// workers. It replaces the v2.x pure-Dart PDF parser (2.8k lines) and is
+/// inherently consistent with what's on screen.
+///
+/// Words/lines are built from pdfium's word-level fragments (which carry
+/// geometry + direction), rotated into view space and grouped into lines.
+/// Pages load sequentially and become available as they arrive.
 class PdfTextService extends ChangeNotifier {
   PdfTextService._();
 
@@ -31,28 +96,40 @@ class PdfTextService extends ChangeNotifier {
 
   /// Extracts the text of the PDF at [absPath] (no-op when already done).
   Future<void> load(String absPath) async {
-    if (_path == absPath) {
-      if (_pages != null || _loading) return;
-    }
+    if (_path == absPath && (_pages != null || _loading)) return;
     _path = absPath;
     _pages = null;
     _loading = true;
     notifyListeners();
+    PdfDocument? doc;
     try {
-      final bytes = await _readFile(absPath);
+      doc = await PdfDocument.openFile(absPath);
       if (_path != absPath) return; // superseded
-      final result = await Isolate.run(() => extractPdfTextPages(bytes));
-      if (_path != absPath) return;
-      _pages = result;
+      _pages = {};
+      for (final page in doc.pages) {
+        if (_path != absPath) return; // superseded
+        try {
+          final text = await page.loadStructuredText();
+          if (_path != absPath) return;
+          _pages![page.pageNumber] = _buildPage(page, text);
+        } catch (_) {
+          // One unreadable page must not kill the document.
+          _pages![page.pageNumber] = PdfTextPage.empty;
+        }
+        notifyListeners();
+      }
     } catch (_) {
-      if (_path == absPath) _pages = {};
+      if (_path == absPath) _pages = _pages ?? {};
     } finally {
       if (_path == absPath) _loading = false;
       notifyListeners();
+      try {
+        await doc?.dispose();
+      } catch (_) {
+        // Best effort.
+      }
     }
   }
-
-  static Future<Uint8List> _readFile(String path) => File(path).readAsBytes();
 
   /// Drops the cache (document closed).
   void clear() {
@@ -63,6 +140,131 @@ class PdfTextService extends ChangeNotifier {
   }
 
   PdfTextPage? page(int pageNumber) => _pages?[pageNumber];
+
+  // ------------------------------------------------------------- building
+
+  /// Maps a pdfium rect (UNROTATED page space, origin bottom-left, y up)
+  /// to view space (rotated page, origin top-left, y down).
+  static Rect _viewRect(
+    double l,
+    double t,
+    double r,
+    double b,
+    PdfPageRotation rot,
+    double uw,
+    double uh,
+  ) {
+    switch (rot) {
+      case PdfPageRotation.none:
+        return Rect.fromLTRB(l, uh - t, r, uh - b);
+      case PdfPageRotation.clockwise90:
+        // (x, y) → (X=y, Y=uw−x); view flip: viewY = RH − Y (RH = uw).
+        return Rect.fromLTRB(b, l, t, r);
+      case PdfPageRotation.clockwise180:
+        return Rect.fromLTRB(uw - r, b, uw - l, t);
+      case PdfPageRotation.clockwise270:
+        // (x, y) → (X=uh−y, Y=x); view flip: viewY = uw − Y.
+        return Rect.fromLTRB(uh - t, uw - r, uh - b, uw - l);
+    }
+  }
+
+  /// Test seam: builds a [PdfTextPage] from a page + structured text.
+  static PdfTextPage buildPageForTest(PdfPage page, PdfPageText text) =>
+      _buildPage(page, text);
+
+  static PdfTextPage _buildPage(PdfPage page, PdfPageText text) {
+    final rot = page.rotation;
+    // Unrotated page dims (page.width/height are ROTATED).
+    final bool swapped =
+        rot == PdfPageRotation.clockwise90 || rot == PdfPageRotation.clockwise270;
+    final uw = swapped ? page.height : page.width;
+    final uh = swapped ? page.width : page.height;
+
+    final words = <PdfTWord>[];
+    final lines = <PdfTLine>[];
+
+    var lineStartWord = 0;
+    var sawAnyFragment = false;
+
+    void closeLine() {
+      final end = words.length - 1;
+      if (end < lineStartWord) {
+        lineStartWord = words.length;
+        return;
+      }
+      // Union rect of the line's words.
+      var x0 = words[lineStartWord].x;
+      var y0 = words[lineStartWord].y;
+      var x1 = x0 + words[lineStartWord].w;
+      var y1 = y0 + words[lineStartWord].h;
+      for (var i = lineStartWord + 1; i <= end; i++) {
+        final w = words[i];
+        if (w.x < x0) x0 = w.x;
+        if (w.y < y0) y0 = w.y;
+        if (w.x + w.w > x1) x1 = w.x + w.w;
+        if (w.y + w.h > y1) y1 = w.y + w.h;
+      }
+      var rtlCount = 0;
+      for (var i = lineStartWord; i <= end; i++) {
+        if (words[i].rtl) rtlCount++;
+      }
+      final rtl = rtlCount * 2 > (end - lineStartWord + 1);
+      // Visual order detection for RTL lines: in VISUAL storage the first
+      // stored word is the LEFTMOST on screen (copy must reverse); in
+      // logical storage the first word is the RIGHTMOST (copy keeps order).
+      final first = words[lineStartWord];
+      final last = words[end];
+      final visualOrder = rtl && first.x < last.x;
+      // Baseline: just under the text (bottom + ~16% of height), A→B in
+      // storage order.
+      final h = y1 - y0;
+      final baselineY = y1 - h * 0.16;
+      lines.add(PdfTLine(
+        lineStartWord,
+        end,
+        first.x,
+        baselineY,
+        last.x + last.w,
+        baselineY,
+        x0,
+        y0,
+        x1 - x0,
+        y1 - y0,
+        rtl,
+        visualOrder,
+      ));
+      lineStartWord = words.length;
+    }
+
+    for (final f in text.fragments) {
+      final s = f.text;
+      if (s.isEmpty) continue;
+      sawAnyFragment = true;
+      if (s == '\n') {
+        closeLine();
+        continue;
+      }
+      if (s.trim().isEmpty) continue; // space fragment — word separator
+      // Word rect: the fragment bounds (normalized char boxes).
+      final b = f.bounds;
+      if (b.isEmpty) continue;
+      final vr = _viewRect(b.left, b.top, b.right, b.bottom, rot, uw, uh);
+      if (vr.width <= 0 || vr.height <= 0) continue;
+      final rtl = f.direction == PdfTextDirection.rtl || _isRtlText(s);
+      words.add(PdfTWord(s, vr.left, vr.top, vr.width, vr.height, rtl));
+    }
+    if (sawAnyFragment) closeLine();
+
+    if (words.isEmpty) {
+      return PdfTextPage(
+        const [],
+        const [],
+        page.width,
+        page.height,
+      );
+    }
+    return PdfTextPage(words, lines, page.width, page.height);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -80,11 +282,13 @@ class PdfTextSelectionController extends ChangeNotifier {
   int? pageId;
   int pageNumber = 0;
 
-  /// View-points → page-units scale (page doc width / pdfx page width).
+  /// View-points → page-units scale (page doc width / renderer page width).
   double scale = 1.0;
 
-  /// Normalization against pdfx's reported page size (CropBox vs MediaBox
-  /// edge cases): pdfxWidth / extractedViewWidth.
+  /// Normalization against the renderer's reported page size (CropBox edge
+  /// cases): rendererWidth / extractedViewWidth. With pdfrx both live in
+  /// the same space, so this is normally 1.0 — kept as a self-correcting
+  /// safety net.
   double _normX = 1.0;
   double _normY = 1.0;
 
@@ -302,7 +506,7 @@ class PdfTextSelectionController extends ChangeNotifier {
 
   /// Selected text in LOGICAL reading order. RTL lines with a visual word
   /// arrangement (the normally-rendered case) are reversed word by word;
-  /// naive unshaped lines keep their left-to-right logical order.
+  /// logically stored lines keep their stored order.
   String selectedText() {
     final r = range;
     final p = _page;

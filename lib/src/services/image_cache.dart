@@ -16,6 +16,13 @@ import '../persistence/file_store.dart';
 /// image cache. The workspace installs [peekSync] as the
 /// `ElementsPainter.resolveImage` hook so page elements can resolve their
 /// images synchronously during paint.
+///
+/// Evicted entries are NOT disposed on purpose: painters resolve images
+/// synchronously during a paint pass and may still hold a reference to an
+/// entry for the rest of that frame — disposing it would kill the
+/// rasterizer (same policy as the ref-counted PDF page cache; see
+/// PdfDocumentController). The engine attaches a finalizer to every
+/// [ui.Image], so evicted-but-unreferenced pixels are reclaimed by the GC.
 class AppImageCache {
   AppImageCache._();
 

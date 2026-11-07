@@ -1,63 +1,31 @@
 import 'dart:convert';
-import 'package:isar/isar.dart';
+
+import 'package:drift/drift.dart';
 
 import '../models/page_elements.dart';
 import '../models/stroke.dart';
 import 'app_db.dart';
+import 'entities.dart';
 import 'file_store.dart';
+
+// The v2.x codebase defined these entities inside this file — keep the
+// import surface identical for every consumer.
+export 'entities.dart';
 import 'library_repository.dart';
 
-part 'stroke_repository.g.dart';
-
-/// One committed ink stroke, stored as JSON for full fidelity
-/// (style + points + audio sync + group).
-@collection
-class StrokeEntity {
-  Id id = Isar.autoIncrement;
-
-  /// The STABLE ink slot: PageEntity.id (never the visual index).
-  int pageId = 0;
-
-  /// Global z-order within the page (shared with elements).
-  int z = 0;
-
-  String data = '';
-
-  StrokeEntity();
-
-  StrokeEntity.of(this.pageId, this.z, this.data);
-}
-
-/// One page element (text / shape / image / sticker), stored as JSON.
-@collection
-class ElementEntity {
-  Id id = Isar.autoIncrement;
-
-  int pageId = 0;
-
-  int z = 0;
-
-  String data = '';
-
-  ElementEntity();
-
-  ElementEntity.of(this.pageId, this.z, this.data);
-}
-
-/// Ink + element persistence.
+/// Ink + element persistence. Same public API as the Isar era — Drift-backed.
 class StrokeRepository {
   StrokeRepository._();
 
   static final StrokeRepository I = StrokeRepository._();
 
-  Isar get _db => AppDb.db;
+  AppDb get _db => AppDb.db;
 
   Future<List<Stroke>> loadStrokes(int pageId) async {
-    final rows = await _db.strokeEntitys
-        .filter()
-        .pageIdEqualTo(pageId)
-        .sortByZ()
-        .findAll();
+    final rows = await (_db.select(_db.strokes)
+          ..where((r) => r.pageId.equals(pageId))
+          ..orderBy([(r) => OrderingTerm.asc(r.z)]))
+        .get();
     final out = <Stroke>[];
     for (final r in rows) {
       try {
@@ -73,11 +41,10 @@ class StrokeRepository {
   }
 
   Future<List<PageElement>> loadElements(int pageId) async {
-    final rows = await _db.elementEntitys
-        .filter()
-        .pageIdEqualTo(pageId)
-        .sortByZ()
-        .findAll();
+    final rows = await (_db.select(_db.elements)
+          ..where((r) => r.pageId.equals(pageId))
+          ..orderBy([(r) => OrderingTerm.asc(r.z)]))
+        .get();
     final out = <PageElement>[];
     for (final r in rows) {
       try {
@@ -92,24 +59,36 @@ class StrokeRepository {
   }
 
   /// Full replace of a page's ink + elements.
-  Future<void> savePage(int pageId, List<Stroke> strokes,
-      List<PageElement> elements) async {
-    await _db.writeTxn(() async {
-      await _db.strokeEntitys.filter().pageIdEqualTo(pageId).deleteAll();
-      await _db.elementEntitys.filter().pageIdEqualTo(pageId).deleteAll();
+  Future<void> savePage(
+      int pageId, List<Stroke> strokes, List<PageElement> elements) async {
+    await _db.transaction(() async {
+      await (_db.delete(_db.strokes)..where((r) => r.pageId.equals(pageId)))
+          .go();
+      await (_db.delete(_db.elements)..where((r) => r.pageId.equals(pageId)))
+          .go();
       for (final s in strokes) {
-        await _db.strokeEntitys.put(StrokeEntity.of(pageId, s.z, jsonEncode(s.toJson())));
+        await _db.into(_db.strokes).insert(StrokesCompanion.insert(
+              pageId: pageId,
+              z: Value(s.z),
+              data: Value(jsonEncode(s.toJson())),
+            ));
       }
       for (final e in elements) {
-        await _db.elementEntitys.put(ElementEntity.of(pageId, e.z, jsonEncode(e.toJson())));
+        await _db.into(_db.elements).insert(ElementsCompanion.insert(
+              pageId: pageId,
+              z: Value(e.z),
+              data: Value(jsonEncode(e.toJson())),
+            ));
       }
     });
   }
 
   Future<void> deletePageInk(int pageId) async {
-    await _db.writeTxn(() async {
-      await _db.strokeEntitys.filter().pageIdEqualTo(pageId).deleteAll();
-      await _db.elementEntitys.filter().pageIdEqualTo(pageId).deleteAll();
+    await _db.transaction(() async {
+      await (_db.delete(_db.strokes)..where((r) => r.pageId.equals(pageId)))
+          .go();
+      await (_db.delete(_db.elements)..where((r) => r.pageId.equals(pageId)))
+          .go();
     });
   }
 
@@ -118,16 +97,22 @@ class StrokeRepository {
   Future<void> duplicatePageInk(int fromPageId, int toPageId) async {
     final strokes = await loadStrokes(fromPageId);
     final elements = await loadElements(fromPageId);
-    await _db.writeTxn(() async {
+    await _db.transaction(() async {
       for (final s in strokes) {
         final c = s.deepCopy();
-        await _db.strokeEntitys
-            .put(StrokeEntity.of(toPageId, c.z, jsonEncode(c.toJson())));
+        await _db.into(_db.strokes).insert(StrokesCompanion.insert(
+              pageId: toPageId,
+              z: Value(c.z),
+              data: Value(jsonEncode(c.toJson())),
+            ));
       }
       for (final e in elements) {
         final c = e.deepCopy();
-        await _db.elementEntitys
-            .put(ElementEntity.of(toPageId, c.z, jsonEncode(c.toJson())));
+        await _db.into(_db.elements).insert(ElementsCompanion.insert(
+              pageId: toPageId,
+              z: Value(c.z),
+              data: Value(jsonEncode(c.toJson())),
+            ));
       }
     });
   }
@@ -165,24 +150,42 @@ class StrokeRepository {
 
   // ---------------------------------------------------------- backup dump
 
-  Future<List<StrokeEntity>> dumpStrokes() async =>
-      _db.strokeEntitys.filter().idGreaterThan(-1).findAll();
+  Future<List<StrokeEntity>> dumpStrokes() async {
+    final rows = await (_db.select(_db.strokes)
+          ..orderBy([(r) => OrderingTerm.asc(r.id)]))
+        .get();
+    return [for (final r in rows) r.toEntity()];
+  }
 
-  Future<List<ElementEntity>> dumpElements() async =>
-      _db.elementEntitys.filter().idGreaterThan(-1).findAll();
+  Future<List<ElementEntity>> dumpElements() async {
+    final rows = await (_db.select(_db.elements)
+          ..orderBy([(r) => OrderingTerm.asc(r.id)]))
+        .get();
+    return [for (final r in rows) r.toEntity()];
+  }
 
   Future<void> restoreStrokes(List<StrokeEntity> rows) async {
-    await _db.writeTxn(() async {
+    await _db.transaction(() async {
       for (final r in rows) {
-        await _db.strokeEntitys.put(r);
+        await _db.into(_db.strokes).insert(StrokesCompanion.insert(
+              id: Value(r.id),
+              pageId: r.pageId,
+              z: Value(r.z),
+              data: Value(r.data),
+            ));
       }
     });
   }
 
   Future<void> restoreElements(List<ElementEntity> rows) async {
-    await _db.writeTxn(() async {
+    await _db.transaction(() async {
       for (final r in rows) {
-        await _db.elementEntitys.put(r);
+        await _db.into(_db.elements).insert(ElementsCompanion.insert(
+              id: Value(r.id),
+              pageId: r.pageId,
+              z: Value(r.z),
+              data: Value(r.data),
+            ));
       }
     });
   }

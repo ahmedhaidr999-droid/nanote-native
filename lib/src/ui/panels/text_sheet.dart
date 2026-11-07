@@ -227,7 +227,11 @@ class _TextSheetState extends State<_TextSheet> {
             SizedBox(
               height: 44,
               child: Slider(
-                value: _size,
+                // Clamped: the tool settings panel allows text sizes up to 96
+                // (and existing TextEls can carry any size), while this sheet
+                // caps at 72 — an unclamped value would trip the Slider
+                // "value <= max" assertion.
+                value: _size.clamp(8.0, 72.0).toDouble(),
                 min: 8,
                 max: 72,
                 divisions: 64,

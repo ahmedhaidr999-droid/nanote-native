@@ -68,8 +68,7 @@ class ViewportController extends ChangeNotifier {
   /// Zoom percent for the header (e.g. 137).
   int get zoomPercent => (_scale * 100).round();
 
-  Matrix4 get matrix => Matrix4.identity()
-    ..scale(_scale, _scale, 1.0)
+  Matrix4 get matrix => Matrix4.diagonal3Values(_scale, _scale, 1.0)
     ..setTranslation(vm.Vector3(_pan.dx, _pan.dy, 0));
 
   Offset get pan => _pan;
@@ -249,8 +248,6 @@ class ViewportController extends ChangeNotifier {
     }
 
     // §5 flight duration: min(520ms, 150 + distance × 0.08).
-    final dist = (targetPan - _pan).distance;
-    final ms = math.min(520.0, 150.0 + dist * 0.08);
     _jumping = true;
     _jumpFromScale = _scale;
     _jumpToScale = targetScale;

@@ -1,15 +1,17 @@
 include: package:flutter_lints/flutter.yaml
 
 analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+  errors:
+    invalid_annotation_target: ignore
   exclude:
-    - "**/*.g.dart"
-    - "lib/src/generated/**"
-    # Vendored pdfx fork: the pigeons/ folder is the Pigeon INPUT spec
-    # (regenerates the committed platform code); it references the `pigeon`
-    # dev tool which is not an app dependency.
-    - "third_party/pdfx/pigeons/**"
+    - build/**
+    - android/**
 
 linter:
   rules:
-    avoid_print: false
     prefer_single_quotes: true
+    unawaited_futures: false
+    avoid_redundant_argument_values: false

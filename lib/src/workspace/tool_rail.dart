@@ -313,11 +313,20 @@ class _ToolRailState extends State<ToolRail> {
           onTap: widget.ruler.toggle,
         );
       case _ExtraRail.mic:
-        return _RailButton(
-          icon: LucideIcons.mic,
-          active: AudioController.I.isRecording,
-          tooltip: S.t('audio'),
-          onTap: widget.onMicTap,
+        // BUGFIX (port): the rail bodies listen to tools / history / ruler /
+        // settings — but NOT to AudioController, so the mic tile's
+        // "recording" highlight went stale the moment a session started or
+        // stopped inside the audio panel. Rebuild just this tile from the
+        // controller instead of the whole rail (it also notifies at the
+        // 100ms level-polling rate while recording).
+        return AnimatedBuilder(
+          animation: AudioController.I,
+          builder: (context, _) => _RailButton(
+            icon: LucideIcons.mic,
+            active: AudioController.I.isRecording,
+            tooltip: S.t('audio'),
+            onTap: widget.onMicTap,
+          ),
         );
     }
   }

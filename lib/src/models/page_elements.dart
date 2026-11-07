@@ -113,11 +113,11 @@ class TextEl extends PageElement {
       };
 
   factory TextEl.fromJson(Map<String, dynamic> j) => TextEl(
-        id: j['id'] as String,
+        id: j['id'] as String? ?? ElementIdGen.next(),
         z: (j['z'] as num?)?.toInt() ?? 0,
         text: (j['tx'] as String?) ?? '',
-        x: (j['x'] as num).toDouble(),
-        y: (j['y'] as num).toDouble(),
+        x: (j['x'] as num?)?.toDouble() ?? 0,
+        y: (j['y'] as num?)?.toDouble() ?? 0,
         w: (j['w'] as num?)?.toDouble() ?? 220,
         size: (j['sz'] as num?)?.toDouble() ?? 18,
         font: TextFontIdX.fromId((j['f'] as num?)?.toInt() ?? 0),
@@ -229,7 +229,7 @@ class ShapeEl extends PageElement {
   factory ShapeEl.fromJson(Map<String, dynamic> j) {
     final flat = (j['p'] as List?)?.map((e) => (e as num).toDouble()).toList();
     return ShapeEl(
-      id: j['id'] as String,
+      id: j['id'] as String? ?? ElementIdGen.next(),
       z: (j['z'] as num?)?.toInt() ?? 0,
       type: ShapeTypeX.fromId((j['ty'] as num?)?.toInt() ?? 0),
       strokeColor: (j['sc'] as num?)?.toInt() ?? 0xFF16233A,
@@ -332,14 +332,14 @@ class ImageEl extends PageElement {
       };
 
   factory ImageEl.fromJson(Map<String, dynamic> j) => ImageEl(
-        id: j['id'] as String,
+        id: j['id'] as String? ?? ElementIdGen.next(),
         z: (j['z'] as num?)?.toInt() ?? 0,
         src: j['s'] as String?,
         builtinId: j['b'] as String?,
-        x: (j['x'] as num).toDouble(),
-        y: (j['y'] as num).toDouble(),
-        w: (j['w'] as num).toDouble(),
-        h: (j['h'] as num).toDouble(),
+        x: (j['x'] as num?)?.toDouble() ?? 0,
+        y: (j['y'] as num?)?.toDouble() ?? 0,
+        w: (j['w'] as num?)?.toDouble() ?? 0,
+        h: (j['h'] as num?)?.toDouble() ?? 0,
         rotation: (j['r'] as num?)?.toDouble() ?? 0,
         flipH: j['fh'] as bool? ?? false,
         flipV: j['fv'] as bool? ?? false,

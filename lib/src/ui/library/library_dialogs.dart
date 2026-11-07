@@ -474,9 +474,10 @@ class NotebookFormFieldsState extends State<NotebookFormFields> {
   }
 
   Future<void> _pickCoverImage() async {
-    final res = await FilePicker.platform.pickFiles(type: FileType.image);
-    final files = res?.files;
-    final path = (files != null && files.isNotEmpty) ? files.first.path : null;
+    // v1.0.0: file_picker 13 removed `FilePicker.platform` — pickFiles is
+    // now static and returns a non-null list (empty when the user cancels).
+    final files = await FilePicker.pickFiles(type: FileType.image);
+    final path = files.isNotEmpty ? files.first.path : null;
     if (path == null) return;
     final rel = await FileStore.importFile(File(path), 'covers');
     if (!mounted) return;
@@ -1172,7 +1173,11 @@ Future<void> showTagEditor(BuildContext context, NotebookEntity n) async {
                             final t =
                                 await c.createTag(name, color.toARGB32());
                             await c.assignTag(n, t);
-                            nameCtrl.clear();
+                            // The sheet can be dismissed while the writes
+                            // are in flight — nameCtrl is disposed right
+                            // after the sheet future completes, so don't
+                            // touch it once unmounted.
+                            if (context.mounted) nameCtrl.clear();
                           },
                           icon: const Icon(LucideIcons.plus, size: 20),
                           label: Text(S.t('newTag')),
