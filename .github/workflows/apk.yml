@@ -43,7 +43,9 @@ jobs:
             || (git checkout -- . && echo "::warning::drift codegen failed; using committed .g.dart files")
 
       - name: Analyze
-        run: flutter analyze
+        # Errors and warnings fail the build; info-level lints (naming
+        # conventions of the preserved v2.x public API) do not.
+        run: flutter analyze --no-fatal-infos
 
       - name: Unit tests
         run: flutter test
