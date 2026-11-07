@@ -32,6 +32,15 @@ jobs:
       - name: Flutter doctor
         run: flutter doctor -v
 
+      - name: Install Android NDK (llvm-strip for release symbol stripping)
+        # AGP needs the NDK's llvm-strip for stripReleaseDebugSymbols even
+        # though no module compiles native code (the flutter_tools cmake stub
+        # is disabled in android/build.gradle). Install it explicitly so the
+        # build never depends on AGP's flaky auto-download.
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.0.12077973" > /dev/null ||           yes | sdkmanager "ndk;27.0.12077973" > /dev/null || true
+          ls "$ANDROID_HOME/ndk" || true
+
       - name: Install dependencies
         run: flutter pub get
 
@@ -52,7 +61,7 @@ jobs:
       # 3.1.0+1 needs (see android/build.gradle).
 
       - name: Build release APK
-        run: flutter build apk --release --build-name=2.6.0 --build-number=${{ github.run_number }}
+        run: flutter build apk --release --build-name=2.6.1 --build-number=${{ github.run_number }}
 
       - name: Sign APK (when keystore secrets are configured)
         env:
