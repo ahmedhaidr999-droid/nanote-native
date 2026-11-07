@@ -52,15 +52,32 @@ class PdfDocumentController extends ChangeNotifier {
 
   static final PdfDocumentController I = PdfDocumentController._();
 
+  /// v2.6.1 pipeline trace — set [debugLog] to true (or run
+  /// `adb logcat | grep NanotePdf`) to see every stage of the render
+  /// pipeline: open, page-size resolves, renders, failures, watchdog
+  /// recoveries and cache state. Written with debugPrint so it is visible
+  /// in release builds via logcat as well.
+  static bool debugLog = false;
+
+  static void _log(String msg) {
+    if (!debugLog) return;
+    // ignore: avoid_print
+    print('[NanotePdf] $msg');
+  }
+
   static const List<double> _buckets = [1.0, 1.5, 2.0, 3.0];
 
   /// v2.6.0: 8 entries × ≤ ~12MB ≈ 95MB worst case (was 12 × ~14.5MB).
   static const int _maxCacheEntries = 8;
 
-  /// v2.6.0: 1440px wide rasters (~170dpi for A4) — plenty for fit-width
-  /// reading at 3× dpr, ~20% fewer bytes per bitmap than 1600px, and the
-  /// reduced LRU halves the peak decoded-image budget (the OOM driver).
-  static const int _maxRenderWidthPx = 1440;
+  /// v2.6.1: 1080px wide rasters (~130dpi for A4 at fit-width — crisp on
+  /// phones, 44% fewer bytes per bitmap than the v2.6.0 1440 cap). The
+  /// 1440 cap was still the OOM driver on mid-RAM devices: page 1 rendered
+  /// with fresh memory, then every later page's 12MB bitmap+decode OOMed
+  /// in a loop — exactly "only page 1 shows, pages 2+ stay blank".
+  /// Repeated failures now ALSO walk this page down a resolution ladder
+  /// (see [_widthLadder]) so an OOM retry actually succeeds.
+  static const int _maxRenderWidthPx = 1080;
 
   // ------------------------------------------------------- v2.6.0 watchdog
 
@@ -108,6 +125,15 @@ class PdfDocumentController extends ChangeNotifier {
 
   /// Failed renders by key → when the failure was recorded (for retry).
   final Map<String, DateTime> _failedAt = {};
+
+  /// v2.6.1 MEMORY-AWARE RETRY LADDER: page number → current width cap.
+  /// After two consecutive failures of a page (typically OOM at high
+  /// resolution on low-RAM devices) the page's raster width walks down
+  /// [render ladder] 1080 → 720 → 540 → 405 so the retry can actually
+  /// succeed instead of OOMing forever at the same size. Cleared on the
+  /// page's next successful render.
+  static const List<int> _ladderSteps = [720, 540, 405];
+  final Map<int, int> _widthLadder = {};
   static const Duration _retryDelay = Duration(milliseconds: 650);
 
   /// In-flight size resolutions by page number.
@@ -149,6 +175,8 @@ class PdfDocumentController extends ChangeNotifier {
   /// reset the queue, and schedule a rate-limited document reopen.
   void _onTaskExpired(_QueueTask task) {
     if (!identical(_running, task)) return;
+    _log('WATCHDOG fired: task expired (${task.priority ? "priority" : "bg"}, '
+        'pending=${_pending.length}) — force-resetting the queue');
     _running = null;
     // Unblock every queued caller (their tasks are dropped).
     for (final t in List.of(_pending)) {
@@ -157,6 +185,7 @@ class PdfDocumentController extends ChangeNotifier {
     _pending.clear();
     // Drop in-flight bookkeeping so retries start FRESH renders.
     _inFlight.clear();
+    _sizeFutures.clear();
     // Best-effort native recovery, rate-limited.
     _scheduleWedgeRecovery();
   }
@@ -165,15 +194,24 @@ class PdfDocumentController extends ChangeNotifier {
     final path = currentPath;
     final now = DateTime.now();
     final last = _lastRecoveryAt;
-    if (last != null && now.difference(last) < _recoveryCooldown) return;
+    if (last != null && now.difference(last) < _recoveryCooldown) {
+      _log('recovery skipped: cooldown (${now.difference(last).inMilliseconds}ms '
+          'since last)');
+      return;
+    }
     if (path == null) return;
-    if (_recoveryPath == path && _recoveries >= _maxAutoRecoveries) return;
+    if (_recoveryPath == path && _recoveries >= _maxAutoRecoveries) {
+      _log('recovery skipped: budget exhausted ($_recoveries/$_maxAutoRecoveries)');
+      return;
+    }
     if (_recoveryPath != path) {
       _recoveryPath = path;
       _recoveries = 0;
     }
     _recoveries++;
     _lastRecoveryAt = now;
+    _log('recovery #$_recoveries scheduled in ${recoveryDelay.inMilliseconds}ms '
+        'for $path');
     // Give the (presumed stuck) native call a moment to settle, then
     // reopen the document outside the reset queue.
     Future<void>.delayed(recoveryDelay, () {
@@ -186,6 +224,7 @@ class PdfDocumentController extends ChangeNotifier {
   }
 
   Future<void> _reopenForRecovery(String path) async {
+    _log('recovery: reopening $path');
     _token++;
     final old = _doc;
     _doc = null;
@@ -194,17 +233,17 @@ class PdfDocumentController extends ChangeNotifier {
     if (old != null) {
       try {
         await old.close().timeout(docDeadline);
-      } catch (_) {
-        // Already closed natively / wedged — nothing more we can do.
+      } catch (e) {
+        _log('recovery: old doc close failed: $e');
       }
     }
     try {
       final doc = await PdfDocument.openFile(path).timeout(docDeadline);
       _doc = doc;
       currentPath = path;
-    } catch (_) {
-      // Reopen failed — tiles keep the paper placeholder; the next
-      // workspace open retries.
+      _log('recovery: reopened ${doc.id} (${doc.pagesCount} pages)');
+    } catch (e) {
+      _log('recovery: reopen FAILED: $e');
       return;
     }
     // A previous page may have been left OPEN natively by the wedged
@@ -233,9 +272,15 @@ class PdfDocumentController extends ChangeNotifier {
     next ??= _pending.isEmpty ? null : _pending.removeAt(0);
     if (next == null) return;
     _running = next;
-    next.onExpired = () => _onTaskExpired(next!);
-    next.run().whenComplete(() {
-      if (identical(_running, next)) _running = null;
+    final picked = next;
+    next.onExpired = () => _onTaskExpired(picked);
+    _log('queue: start task #${picked.seq} '
+        '(${picked.priority ? "priority" : "bg"}); '
+        'pending after pickup=${_pending.length}');
+    picked.run().whenComplete(() {
+      if (identical(_running, picked)) _running = null;
+      _log('queue: task #${picked.seq} done'
+          '${picked.expired ? " (expired)" : ""}; pending=${_pending.length}');
       // Continue after the current frame so microtask chains can't starve
       // the platform channel.
       scheduleMicrotask(_drain);
@@ -248,6 +293,7 @@ class PdfDocumentController extends ChangeNotifier {
   /// Returns false when the file cannot be opened.
   Future<bool> open(String absPath) async {
     final token = ++_token;
+    _log('open: $absPath (token=$token)');
     final ok = await _runQueued<bool?>(() async {
       final old = _doc;
       _doc = null;
@@ -264,6 +310,7 @@ class PdfDocumentController extends ChangeNotifier {
         final doc = await PdfDocument.openFile(absPath);
         if (token != _token) {
           // A newer open/close raced in — discard this document.
+          _log('open: STALE (token $token != $_token) — discarding');
           try {
             await doc.close();
           } catch (_) {}
@@ -271,17 +318,21 @@ class PdfDocumentController extends ChangeNotifier {
         }
         _doc = doc;
         currentPath = absPath;
+        _log('open: OK ${doc.id} (${doc.pagesCount} pages)');
         return true;
-      } catch (_) {
+      } catch (e) {
+        _log('open: FAILED $e');
         return false;
       }
     }, priority: true, deadline: docDeadline);
     if (ok == true) {
-      // Fresh document → reset the wedge-recovery budget for this path.
-      if (_recoveryPath != absPath) {
-        _recoveryPath = absPath;
-        _recoveries = 0;
-      }
+      // Fresh document → reset the wedge-recovery budget. v2.6.1: ALWAYS
+      // on a successful open, not only when the path differs — the old
+      // condition left a notebook whose budget was exhausted PERMANENTLY
+      // unrecoverable (no more auto-reopens) until a DIFFERENT document
+      // was opened first.
+      _recoveryPath = absPath;
+      _recoveries = 0;
       // Wake every mounted tile: tiles that mounted while the document was
       // still opening burn their 5 retries on `doc == null` and would
       // otherwise stay blank until the next unrelated tick.
@@ -380,24 +431,42 @@ class PdfDocumentController extends ChangeNotifier {
       {bool priority = false}) async {
     final doc = _doc;
     final token = _token;
-    if (doc == null) return null;
-    if (pageNumber < 1 || pageNumber > doc.pagesCount) return null;
+    if (doc == null) {
+      _log('pageImage($pageNumber): no document open');
+      return null;
+    }
+    if (pageNumber < 1 || pageNumber > doc.pagesCount) {
+      _log('pageImage($pageNumber): OUT OF RANGE (pages=${doc.pagesCount})');
+      return null;
+    }
 
     var size = _pageSizes[pageNumber];
     size ??= await _resolvePageSize(doc, token, pageNumber);
-    if (size == null || size.width <= 0 || size.height <= 0) return null;
-    if (token != _token || _doc != doc) return null;
+    if (size == null || size.width <= 0 || size.height <= 0) {
+      _log('pageImage($pageNumber): size unresolved');
+      return null;
+    }
+    if (token != _token || _doc != doc) {
+      _log('pageImage($pageNumber): STALE token — doc changed');
+      return null;
+    }
 
     final scale = _bucketFor(scaleHint);
     var wPx = (size.width * scale).round();
     if (wPx > _maxRenderWidthPx) wPx = _maxRenderWidthPx;
+    // v2.6.1: honor the page's memory-ladder cap (see [_widthLadder]).
+    final ladderCap = _widthLadder[pageNumber];
+    if (ladderCap != null && wPx > ladderCap) wPx = ladderCap;
     if (wPx < 1) wPx = 1;
     final key = '$pageNumber@$wPx';
 
     final hit = _cacheHit(key);
     if (hit != null) {
       final handle = _cacheHandles[key];
-      if (handle != null) return PdfPageBitmap(hit, key, handle);
+      if (handle != null) {
+        _log('pageImage($pageNumber): CACHE HIT $key');
+        return PdfPageBitmap(hit, key, handle);
+      }
     }
 
     // A recent failure for this key: retry only after the backoff (or
@@ -429,6 +498,8 @@ class PdfDocumentController extends ChangeNotifier {
     }
 
     final hPx = (wPx * size.height / size.width).round();
+    _log('pageImage($pageNumber): render request $key (${wPx}x$hPx) '
+        'priority=$priority');
     pending = _runQueued<ui.Image?>(
       priority: priority,
       deadline: renderDeadline,
@@ -441,10 +512,20 @@ class PdfDocumentController extends ChangeNotifier {
     }));
     try {
       final img = await fut.timeout(callTimeout);
-      if (img == null) return null;
+      if (img == null) {
+        _log('pageImage($pageNumber): render FAILED (null) for $key');
+        return null;
+      }
       final handle = _cacheHandles[key];
-      return handle == null ? null : PdfPageBitmap(img, key, handle);
+      if (handle == null) {
+        _log('pageImage($pageNumber): handle MISSING for $key');
+        return null;
+      }
+      _log('pageImage($pageNumber): render OK $key '
+          '(${img.width}x${img.height})');
+      return PdfPageBitmap(img, key, handle);
     } on TimeoutException {
+      _log('pageImage($pageNumber): caller TIMEOUT for $key');
       if (identical(_inFlight[key], fut)) _inFlight.remove(key);
       return null;
     }
@@ -500,11 +581,16 @@ class PdfDocumentController extends ChangeNotifier {
 
   Future<ui.Image?> _render(
       PdfDocument doc, int token, int pageNumber, int wPx, int hPx) async {
-    if (token != _token || _doc != doc) return null;
+    if (token != _token || _doc != doc) {
+      _log('_render($pageNumber): stale token — skip');
+      return null;
+    }
+    _log('_render($pageNumber): getPage…');
     PdfPage? page;
     try {
       page = await doc.getPage(pageNumber);
       _pageSizes[pageNumber] ??= Size(page.width, page.height);
+      _log('_render($pageNumber): rendering ${wPx}x$hPx…');
       final img = await page.render(
         width: wPx.toDouble(),
         height: hPx.toDouble(),
@@ -516,21 +602,29 @@ class PdfDocumentController extends ChangeNotifier {
       );
       await page.close();
       page = null;
-      if (token != _token || _doc != doc) return null;
+      if (token != _token || _doc != doc) {
+        _log('_render($pageNumber): stale after render — drop');
+        return null;
+      }
       if (img == null || img.bytes.isEmpty) {
+        _log('_render($pageNumber): EMPTY bytes — retrying');
         _scheduleRetry('$pageNumber@$wPx');
         return null;
       }
       final image = await _decode(img.bytes);
       if (token != _token || _doc != doc) {
         image.dispose();
+        _log('_render($pageNumber): stale after decode — drop');
         return null;
       }
       _store('$pageNumber@$wPx', image);
+      _log('_render($pageNumber): decoded+stored '
+          '${image.width}x${image.height}');
       renderTick.value = renderTick.value + 1;
       notifyListeners();
       return image;
-    } catch (_) {
+    } catch (e, s) {
+      _log('_render($pageNumber): ERROR $e\n$s');
       try {
         await page?.close();
       } catch (_) {}
@@ -544,10 +638,31 @@ class PdfDocumentController extends ChangeNotifier {
   /// BACKGROUND work — priority (visible) requests reset the counter in
   /// [pageImage], so an on-screen page always gets fresh attempts.
   void _scheduleRetry(String key) {
+    _log('retry scheduled for $key (attempt ${(_retryCounts[key] ?? 0) + 1})');
     _failedAt.putIfAbsent(key, () => DateTime.now());
     final tries = (_retryCounts[key] ?? 0) + 1;
     _retryCounts[key] = tries;
-    if (tries > 8) return; // background give-up (visible pages reset this)
+    // v2.6.1 MEMORY LADDER: two consecutive failures of the same page
+    // (the classic OOM signature — page 1 fine, page 2+ dies at full
+    // raster size) step the page's width cap DOWN so the retry renders a
+    // smaller bitmap and can actually succeed.
+    if (tries >= 2) {
+      final page = int.tryParse(key.split('@').first);
+      if (page != null) {
+        final cur = _widthLadder[page] ?? _maxRenderWidthPx;
+        for (final step in _ladderSteps) {
+          if (step < cur) {
+            _widthLadder[page] = step;
+            _log('memory ladder: page $page width cap → $step');
+            break;
+          }
+        }
+      }
+    }
+    if (tries > 8) {
+      _log('retry GAVE UP for $key (background; visible resets)');
+      return; // background give-up (visible pages reset this)
+    }
     Future<void>.delayed(_retryDelay, () {
       if (_failedAt.containsKey(key)) {
         renderTick.value = renderTick.value + 1;
@@ -611,6 +726,8 @@ class PdfDocumentController extends ChangeNotifier {
     }
     _failedAt.remove(key);
     _retryCounts.remove(key);
+    final page = int.tryParse(key.split('@').first);
+    if (page != null) _widthLadder.remove(page);
   }
 
   /// LRU read: re-inserts the entry so it becomes most recently used.
@@ -662,6 +779,9 @@ class PdfDocumentController extends ChangeNotifier {
 /// One serialized pdfx task with a watchdog deadline.
 class _QueueTask<T> {
   _QueueTask(this._task, {this.priority = false, this.deadline});
+
+  static int _seqGen = 0;
+  final int seq = ++_seqGen;
 
   final Future<T> Function() _task;
   final bool priority;

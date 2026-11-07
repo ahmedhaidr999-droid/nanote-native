@@ -11,7 +11,16 @@ import 'package:pdfx/src/renderer/io/pigeon.dart';
 import 'package:synchronized/synchronized.dart';
 import 'package:universal_platform/universal_platform.dart';
 
-final _lock = Lock();
+// NANOTE FIX (fork hardening): upstream used ONE GLOBAL lock for every
+// pdfx call in the process. A single platform call that never completes
+// (native wedge, engine teardown mid-call, OOM crash pre-Throwable-fix)
+// held that lock FOREVER - every subsequent pdfx operation app-wide
+// queued behind it and never ran, which is exactly the 'only page 1
+// renders, every other page stays blank' failure. Android's real
+// constraint is per-PdfRenderer (one open page per document), so the
+// lock scope is now PER DOCUMENT: a wedged call can only ever block its
+// own document, and the app-level controller replaces that document on
+// watchdog recovery - after which rendering continues on a fresh lock.
 final _api = PdfxApi();
 
 class PdfxPlatformPigeon extends PdfxPlatform {
@@ -66,14 +75,29 @@ class PdfDocumentPigeon extends PdfDocument {
 
   final List<PdfPage?> _pages;
 
+  /// NANOTE FIX (fork hardening): per-document serialization (Android
+  /// allows exactly ONE open page per PdfRenderer). See the note above
+  /// the global lock this replaces.
+  final Lock _docLock = Lock();
+
   @override
-  Future<void> close() => _lock.synchronized(() async {
-        if (isClosed) {
-          throw PdfDocumentAlreadyClosedException();
-        } else {
-          isClosed = true;
+  Future<void> close() => _docLock.synchronized(() async {
+        // NANOTE FIX: idempotent close. Upstream THREW on a second close
+        // and marked the doc closed BEFORE the native call - a native
+        // close failure (Android refuses with a page still open after a
+        // wedged render) left the doc leaked natively and every later
+        // close() throwing forever. Now: closing twice is a no-op, and a
+        // native close error is swallowed - the caller replaces the
+        // document anyway (watchdog recovery), and close() can never
+        // wedge the pipeline again.
+        if (isClosed) return;
+        isClosed = true;
+        try {
+          return await _api.closeDocument(IdMessage()..id = id);
+        } catch (_) {
+          // Native renderer refused/failed - this instance is dead to us
+          // either way; never propagate, never block the caller.
         }
-        return _api.closeDocument(IdMessage()..id = id);
       });
 
   /// Get page object. The first page is 1.
@@ -85,7 +109,7 @@ class PdfDocumentPigeon extends PdfDocument {
     if (pageNumber < 1 || pageNumber > pagesCount) {
       throw RangeError.range(pageNumber, 1, pagesCount);
     }
-    return _lock.synchronized<PdfPage>(() async {
+    return _docLock.synchronized<PdfPage>(() async {
       if (isClosed) {
         throw PdfDocumentAlreadyClosedException();
       }
@@ -147,7 +171,8 @@ class PdfPagePigeon extends PdfPage {
     bool forPrint = false,
     @visibleForTesting bool removeTempFile = true,
   }) =>
-      _lock.synchronized<PdfPageImage?>(() async {
+      (document as PdfDocumentPigeon)._docLock
+          .synchronized<PdfPageImage?>(() async {
         if (document.isClosed) {
           throw PdfDocumentAlreadyClosedException();
         } else if (isClosed) {
@@ -180,13 +205,18 @@ class PdfPagePigeon extends PdfPage {
   }
 
   @override
-  Future<void> close() => _lock.synchronized(() async {
-        if (isClosed) {
-          throw PdfPageAlreadyClosedException();
-        } else {
-          isClosed = true;
+  Future<void> close() =>
+      (document as PdfDocumentPigeon)._docLock.synchronized(() async {
+        // NANOTE FIX: idempotent page close (upstream threw on double
+        // close; a failed close left the page marked closed natively
+        // while the error propagated - both worse than a quiet no-op).
+        if (isClosed) return;
+        isClosed = true;
+        try {
+          return await _api.closePage(IdMessage()..id = id);
+        } catch (_) {
+          // Page already gone natively - nothing to do.
         }
-        return _api.closePage(IdMessage()..id = id);
       });
 
   @override
@@ -259,9 +289,15 @@ class PdfPageImagePigeon extends PdfPageImage {
 
     final retWidth = result.width, retHeight = result.height;
     late final Uint8List pixels;
-    if (UniversalPlatform.isAndroid ||
-        UniversalPlatform.isIOS ||
-        UniversalPlatform.isMacOS) {
+    // NANOTE FIX (fork hardening): choose the pixel source by the REPLY'S
+    // SHAPE, not by the host platform. The Android/iOS/macOS native side
+    // replies with a temp-file PATH (no data); the Windows native side
+    // replies with in-memory data (no path). Branching on the platform made
+    // every render die with a null-check when the reply shape didn't match
+    // the host (an Android-shaped reply consumed off-device - exactly what
+    // the pipeline tests need to do - crashed on "bytes!" and renders
+    // failed SILENTLY: the controller retried forever, pages stayed blank).
+    if (result.path != null) {
       pixels = await getPixels(
         path: result.path,
         removeTempFile: removeTempFile,

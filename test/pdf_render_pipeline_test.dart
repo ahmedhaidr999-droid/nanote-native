@@ -742,7 +742,7 @@ void main() {
       'THE BUG: a never-completing native render (pre-fix OOM wedge) must '
       'not kill the pipeline — watchdog recovers and later pages render',
       (tester) async {
-    final platform = FakePdfxPlatform()..pageCount = 3;
+    final platform = FakePdfxPlatform()..pageCount = 4;
     PdfxPlatform.instance = platform;
 
     final controller = PdfDocumentController.I;
@@ -785,14 +785,15 @@ void main() {
       }
     });
 
-    // ...then page 2's native render WEDGES (the pre-fix OOM: the platform
-    // reply is never delivered; the future never completes). Hint 4.0 maps
-    // to a different quality bucket than the tiles' 2.0 — a FRESH render.
-    // The caller-side timeout unblocks the request, the watchdog resets
-    // the queue and the document reopens.
+    // ...then a FRESH page's native render WEDGES (the pre-fix OOM: the
+    // platform reply is never delivered; the future never completes).
+    // v2.6.1: with the 1080px cap every bucket of an A4 page maps to one
+    // cache key, so the wedged page must be one the tiles never rendered
+    // (page 4) — the caller-side timeout unblocks the request, the
+    // watchdog resets the queue and the document reopens.
     await tester.runAsync(() async {
       platform.wedgeNextRender = true;
-      final bmp = await controller.pageImage(2, 4.0);
+      final bmp = await controller.pageImage(4, 4.0);
       expect(bmp, isNull, reason: 'a wedged render must time out to null');
       // Let the watchdog + recovery reopen complete in real time.
       for (var i = 0; i < 30; i++) {
@@ -804,7 +805,7 @@ void main() {
     expect(controller.isOpen, isTrue,
         reason: 'watchdog recovery must reopen the document');
     await tester.runAsync(() async {
-      for (var n = 1; n <= 3; n++) {
+      for (var n = 1; n <= 4; n++) {
         final bmp = await controller.pageImage(n, 4.0);
         expect(bmp, isNotNull,
             reason: 'page $n must render after watchdog recovery');
@@ -838,7 +839,7 @@ void main() {
     await tester.pump();
   }, timeout: const Timeout(Duration(minutes: 3)));
 
-  testWidgets('memory budget: render widths are capped at 1440px',
+  testWidgets('memory budget: render widths are capped at 1080px',
       (tester) async {
     final platform = FakePdfxPlatform()..pageCount = 2;
     PdfxPlatform.instance = platform;
@@ -864,8 +865,9 @@ void main() {
     print('requested widths: ${platform.requestedWidths}');
     expect(platform.requestedWidths, isNotEmpty);
     for (final w in platform.requestedWidths) {
-      expect(w, lessThanOrEqualTo(1440),
-          reason: 'every native render must respect the 1440px memory cap');
+      expect(w, lessThanOrEqualTo(1080),
+          reason: 'every native render must respect the v2.6.1 1080px '
+              'memory cap');
     }
   }, timeout: const Timeout(Duration(minutes: 2)));
 }

@@ -63,6 +63,24 @@ subprojects { sub ->
     }
 }
 
+// ---------------------------------------------------------------------------
+// NDK-free release builds.
+//
+// flutter_tools adds an EMPTY stub CMakeLists.txt (see
+// flutter_tools/gradle/src/main/groovy/CMakeLists.txt — its own comment:
+// "Empty file to trick the Android Gradle Plugin to download the NDK") purely
+// so AGP fetches an NDK for symbol stripping. The stub produces NOTHING the
+// app uses. On machines without a full NDK (CI runners, slim containers) the
+// configure step fails on the missing toolchain — so disable every task from
+// that stub. Symbol stripping still runs via llvm-strip; when a real NDK is
+// absent, android/gradle.properties or the environment provides one.
+// ---------------------------------------------------------------------------
+subprojects {
+    tasks.matching { it.name.contains('CMake') || it.name.contains('cmake') }.configureEach {
+        onlyIf { false }
+    }
+}
+
 allprojects {
     repositories {
         google()
