@@ -10,6 +10,35 @@ Full feature parity with the Nanote v1.9.1 web app, rebuilt native.
 <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
+## v2.6.3 — Release pipeline repaired + install-on-update fixed
+
+No app-code changes: this release fixes the **release pipeline and the
+"App not installed" problem** on top of v2.6.2.
+
+**What was conflicting and got removed:**
+- Corrupted workflow branch filter (`branches: ain]` → `[main]`) that made
+  main pushes unreliable and double-built tags.
+- Duplicate workflow runs per push (a `concurrency` group now cancels the
+  superseded run).
+- The abandoned `v1` / `v2-line` / `rebuild/v1.0.0-pdfrx` branches, the stray
+  `v1.0.0` / `v2.7.0` tags and the failed `apk.yml` runs are gone.
+
+**Why updates refused to install ("App not installed"):**
+- Releases **v2.0.0–v2.4.0 were signed with a different, since-lost
+  certificate** than v2.5.1+. Android refuses to update an app when the
+  signing certificate changes — that is the classic "App not installed"
+  error. From v2.5.1 on (including this v2.6.3) every release is signed
+  with the same release keystore, so updates install with data intact.
+- If a device still holds a ≤ v2.4.0 install: export a `.nanote` backup
+  from the old app, uninstall it, install v2.6.3, restore the backup.
+- Signing now happens **inside the Gradle build** (`key.properties` +
+  keystore restored from repository secrets before `assembleRelease`):
+  one APK, signed exactly once with the release identity — no more
+  debug-signed intermediate that gets re-signed afterwards.
+- `versionName` is derived from `pubspec.yaml` (no more hardcoded
+  `--build-name`), `versionCode` stays the workflow run number
+  (monotonic: 39 → 42 → 43+).
+
 ## v2.6.2 — Structure restored + PDFium engine + reliable PDF import
 
 **What happened:** a "clean rebuild" (the abandoned v1.0.0/v2.7.0 line)
@@ -289,15 +318,20 @@ was still opening are woken the moment it opens.
 
 ## Getting the APK
 
-1. Go to the **Actions** tab → latest successful **Android APK** run →
-   **Artifacts** → `nanote-native-apk`.
-   (Or download from **Releases** if you tagged `native-v*`.)
+1. Go to the **Releases** page → latest `native-v*` release → download
+   `nanote-native-<version>.apk`.
+   (Or **Actions** tab → latest successful **Android APK** run →
+   **Artifacts** → `nanote-native-apk`.)
 2. Transfer the APK to your phone and install it ("install unknown apps"
    must be allowed for your browser/file manager).
-3. The CI build is signed with the debug key unless the repo has the
-   `NANOTE_KEYSTORE_BASE64` / `NANOTE_KEYSTORE_PASSWORD` /
-   `NANOTE_KEY_ALIAS` / `NANOTE_KEY_PASSWORD` secrets configured — then it is
-   re-signed with your release keystore via `apksigner`.
+3. Every release since v2.5.1 is signed **during the Gradle build** with the
+   release keystore (`NANOTE_KEYSTORE_BASE64` / `NANOTE_KEYSTORE_PASSWORD` /
+   `NANOTE_KEY_ALIAS` / `NANOTE_KEY_PASSWORD` repository secrets) — updates
+   install over any v2.5.1+ build with data intact.
+4. **"App not installed" when updating?** Your device still holds a ≤ v2.4.0
+   build (those were signed with a different, since-lost certificate).
+   Export a `.nanote` backup from the old app, uninstall it, install the
+   new release, restore the backup.
 
 ## Feature map (v1.9.1 parity)
 

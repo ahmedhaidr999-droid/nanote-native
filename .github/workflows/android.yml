@@ -8,6 +8,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# One build per ref at a time: a new push cancels the superseded run.
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -51,10 +56,12 @@ jobs:
       # wrapper and the AGP-8 namespace injection that isar_flutter_libs
       # 3.1.0+1 needs (see android/build.gradle).
 
-      - name: Build release APK
-        run: flutter build apk --release --build-name=2.6.2 --build-number=${{ github.run_number }}
-
-      - name: Sign APK (when keystore secrets are configured)
+      # Restore the release keystore BEFORE the build so Gradle signs the
+      # APK exactly once, during assembleRelease itself (no debug-signed
+      # intermediate, no post-hoc re-signing). The certificate stays the
+      # release identity used since v2.5.1 — updates install over any
+      # v2.5.1+ build with data intact.
+      - name: Restore release keystore
         env:
           NANOTE_KEYSTORE_BASE64: ${{ secrets.NANOTE_KEYSTORE_BASE64 }}
           NANOTE_KEYSTORE_PASSWORD: ${{ secrets.NANOTE_KEYSTORE_PASSWORD }}
@@ -62,20 +69,29 @@ jobs:
           NANOTE_KEY_PASSWORD: ${{ secrets.NANOTE_KEY_PASSWORD }}
         run: |
           if [ -z "$NANOTE_KEYSTORE_BASE64" ]; then
-            echo "No keystore secrets configured — keeping the debug-signed APK."
+            echo "::warning::No keystore secrets configured — the APK will stay debug-signed and NOT installable as an update."
             exit 0
           fi
-          echo -n "$NANOTE_KEYSTORE_BASE64" | base64 -d > /tmp/nanote.keystore
+          echo -n "$NANOTE_KEYSTORE_BASE64" | base64 -d > /tmp/nanote-release.keystore
+          {
+            echo "storeFile=/tmp/nanote-release.keystore"
+            echo "storePassword=$NANOTE_KEYSTORE_PASSWORD"
+            echo "keyAlias=$NANOTE_KEY_ALIAS"
+            echo "keyPassword=$NANOTE_KEY_PASSWORD"
+          } > android/key.properties
+
+      - name: Build release APK
+        run: |
+          VERSION_NAME="$(awk '/^version:/{split($2,a,"+"); print a[1]; exit}' pubspec.yaml)"
+          echo "Building Nanote Native $VERSION_NAME (build ${{ github.run_number }})"
+          flutter build apk --release \
+            --build-name="$VERSION_NAME" \
+            --build-number="${{ github.run_number }}"
+
+      - name: Verify APK signature
+        run: |
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
-          APK=build/app/outputs/flutter-apk/app-release.apk
-          cp "$APK" /tmp/unsigned.apk
-          "$BT/apksigner" sign \
-            --ks /tmp/nanote.keystore \
-            --ks-key-alias "$NANOTE_KEY_ALIAS" \
-            --ks-pass "pass:$NANOTE_KEYSTORE_PASSWORD" \
-            --key-pass "pass:$NANOTE_KEY_PASSWORD" \
-            --out "$APK" /tmp/unsigned.apk
-          "$BT/apksigner" verify --print-certs "$APK"
+          "$BT/apksigner" verify --print-certs build/app/outputs/flutter-apk/app-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
