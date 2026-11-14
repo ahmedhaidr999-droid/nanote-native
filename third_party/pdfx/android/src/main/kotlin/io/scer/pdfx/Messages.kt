@@ -2,15 +2,15 @@ package io.scer.pdfx
 
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.graphics.Matrix
 import android.graphics.Rect
-import android.graphics.pdf.PdfRenderer
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.util.SparseArray
 import android.view.Surface
 import androidx.annotation.RequiresApi
+import com.shockwave.pdfium.PdfDocument
+import com.shockwave.pdfium.PdfiumCore
 import dev.flutter.pigeon.Pigeon
 import io.flutter.BuildConfig
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -25,16 +25,30 @@ import io.scer.pdfx.utils.toFile
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
-import java.lang.RuntimeException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * v2.7.0 — the PDF engine behind this bridge is pdfium (Google Chrome's
+ * PDF engine) instead of the per-device system PdfRenderer.
+ *
+ * Why: the system renderer's behavior varies by Android vendor (several
+ * Samsung/MIUI builds ship one that fails on perfectly valid files) and
+ * it refuses a wide range of normal PDFs. pdfium renders identically on
+ * every device, repairs damaged xref tables, and powers Chrome / Google
+ * Drive — the same engine class professional annotation apps use.
+ *
+ * The Pigeon surface is UNCHANGED, so the Dart layer needs no edits.
+ */
 @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
 class Messages(private val binding : FlutterPlugin.FlutterPluginBinding,
                private val documents: DocumentRepository,
                private val pages: PageRepository) : Pigeon.PdfxApi {
+
+    /** One shared pdfium core — all its calls lock internally. */
+    private val pdfium: PdfiumCore = PdfiumCore(binding.applicationContext)
 
     private val surfaceProducers: SparseArray<TextureRegistry.SurfaceProducer> = SparseArray()
     private val documentStatesPerSurface: SparseArray<Pigeon.UpdateTextureMessage> = SparseArray()
@@ -45,8 +59,8 @@ class Messages(private val binding : FlutterPlugin.FlutterPluginBinding,
     ) {
         val resultResponse = Pigeon.OpenReply()
         try {
-            val documentRenderer = openDataDocument(message.data!!)
-            val document = documents.register(documentRenderer)
+            val documentRenderer = openDataDocument(message.data!!, message.password)
+            val document = documents.register(documentRenderer, pdfium)
             resultResponse.id = document.id
             resultResponse.pagesCount = document.pagesCount.toLong()
             result.success(resultResponse)
@@ -66,8 +80,8 @@ class Messages(private val binding : FlutterPlugin.FlutterPluginBinding,
         val resultResponse = Pigeon.OpenReply()
         try {
             val path = message.path
-            val documentRenderer = openFileDocument(File(path!!))
-            val document = documents.register(documentRenderer)
+            val documentRenderer = openFileDocument(File(path!!), message.password)
+            val document = documents.register(documentRenderer, pdfium)
             resultResponse.id = document.id
             resultResponse.pagesCount = document.pagesCount.toLong()
             result.success(resultResponse)
@@ -91,8 +105,8 @@ class Messages(private val binding : FlutterPlugin.FlutterPluginBinding,
         val resultResponse = Pigeon.OpenReply()
         try {
             val path = message.path
-            val documentRenderer = openAssetDocument(path!!)
-            val document = documents.register(documentRenderer)
+            val documentRenderer = openAssetDocument(path!!, message.password)
+            val document = documents.register(documentRenderer, pdfium)
             resultResponse.id = document.id
             resultResponse.pagesCount = document.pagesCount.toLong()
             result.success(resultResponse)
@@ -130,15 +144,17 @@ class Messages(private val binding : FlutterPlugin.FlutterPluginBinding,
         try {
             val documentId = message.documentId!!
             val pageNumber = message.pageNumber!!.toInt()
+            val document = documents.get(documentId)
 
             if (message.autoCloseAndroid!!) {
-                documents.get(documentId).openPage(pageNumber).use { page ->
-                    resultResponse.width = page.width.toDouble()
-                    resultResponse.height = page.height.toDouble()
+                // Size-only query: open, read dimensions, release.
+                document.withPage(pageNumber) { loaded ->
+                    resultResponse.width = loaded.width.toDouble()
+                    resultResponse.height = loaded.height.toDouble()
                 }
             } else {
-                val pageRenderer = documents.get(documentId).openPage(pageNumber)
-                val page = pages.register(documentId, pageRenderer)
+                val loaded = document.openPage(pageNumber)
+                val page = pages.register(document, loaded)
                 resultResponse.id = page.id
                 resultResponse.width = page.width.toDouble()
                 resultResponse.height = page.height.toDouble()
@@ -185,7 +201,10 @@ class Messages(private val binding : FlutterPlugin.FlutterPluginBinding,
                 val cropX = if (crop) message.cropX?.toInt() ?: 0 else 0
                 val cropY = if (crop) message.cropY?.toInt() ?: 0 else 0
                 val cropH = if (crop) message.cropHeight?.toInt() ?: 0 else 0
-                val cropW = if (crop) message.width?.toInt() ?: 0 else 0
+                // Fixed: upstream pdfx read `width` here instead of
+                // `cropWidth` (dead code for this app — it never crops —
+                // but now it is correct if ever used).
+                val cropW = if (crop) message.cropWidth?.toInt() ?: 0 else 0
 
                 val quality = message.quality?.toInt() ?: 100
                 val forPrint = message.forPrint ?: false
@@ -228,17 +247,17 @@ class Messages(private val binding : FlutterPlugin.FlutterPluginBinding,
                     result.success(resultResponse)
                 }
             } catch (e: Throwable) {
-                // NANOTE FIX (upstream pdfx 2.11 bug): the render coroutine
-                // used to catch only `Exception`. `Bitmap.createBitmap` for a
-                // full-page raster can throw `OutOfMemoryError` (an `Error`,
-                // NOT an `Exception`) under memory pressure - the catch was
-                // skipped, `result.error(...)` never ran, the platform
-                // channel reply was never sent and the Dart-side render
-                // future NEVER COMPLETED. Every serialized renderer stalled
-                // right after the first successful page ("only page 1
-                // renders"). Catching Throwable guarantees the reply is
-                // always delivered; the caller then retries/reopens as a
-                // normal failure.
+                // NANOTE FIX (kept from v2.6.0, upstream pdfx 2.11 bug): the
+                // render coroutine used to catch only `Exception`.
+                // `Bitmap.createBitmap` for a full-page raster can throw
+                // `OutOfMemoryError` (an `Error`, NOT an `Exception`) under
+                // memory pressure - the catch was skipped, `result.error(...)`
+                // never ran, the platform channel reply was never sent and
+                // the Dart-side render future NEVER COMPLETED. Every
+                // serialized renderer stalled right after the first
+                // successful page ("only page 1 renders"). Catching
+                // Throwable guarantees the reply is always delivered; the
+                // caller then retries/reopens as a normal failure.
                 withContext(Dispatchers.Main) {
                     result.error(PdfRendererException("pdf_renderer", "Unexpected error", e))
                 }
@@ -307,9 +326,9 @@ class Messages(private val binding : FlutterPlugin.FlutterPluginBinding,
     ) {
         val pageNumber = message.pageNumber!!.toInt()
         val document = documents.get(message.documentId!!)
-        document.openPage(pageNumber).use { page ->
-            val fullWidth = message.fullWidth ?: page.width.toDouble()
-            val fullHeight = message.fullHeight ?: page.height.toDouble()
+        document.withPage(pageNumber) { loaded ->
+            val fullWidth = message.fullWidth ?: loaded.width.toDouble()
+            val fullHeight = message.fullHeight ?: loaded.height.toDouble()
             val destX = message.destinationX!!.toInt()
             val destY = message.destinationY!!.toInt()
             val width = message.width!!.toInt()
@@ -320,27 +339,40 @@ class Messages(private val binding : FlutterPlugin.FlutterPluginBinding,
 
             if (width <= 0 || height <= 0) {
                 result?.error(PdfRendererException("pdf_renderer", "updateTexture width/height == 0", null))
+                return@withPage
             }
 
-            val mat = Matrix()
-            mat.setValues(floatArrayOf((fullWidth / page.width).toFloat(), 0f, -srcX.toFloat(), 0f, (fullHeight / page.height).toFloat(), -srcY.toFloat(), 0f, 0f, 1f))
-
             try {
-                val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                if (backgroundColor != null) {
-                    bmp.eraseColor(Color.parseColor(backgroundColor))
-                }
-                page.render(bmp, null, mat, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                // pdfium renders whole pages; render the page once at the
+                // requested full size, then blit the requested source rect
+                // to the destination rect (the notebook pipeline does not
+                // use the texture path — correctness is what matters here).
+                val fullW = fullWidth.toInt().coerceAtLeast(1).coerceAtMost(4096)
+                val fullH = fullHeight.toInt().coerceAtLeast(1).coerceAtMost(4096)
+                val bmp = Bitmap.createBitmap(fullW, fullH, Bitmap.Config.ARGB_8888)
+                try {
+                    if (backgroundColor != null) {
+                        bmp.eraseColor(Color.parseColor(backgroundColor))
+                    }
+                    pdfium.renderPageBitmap(loaded.pdfDocument, bmp, loaded.index, 0, 0, fullW, fullH, true)
 
-                surface.use {
-                    val canvas = it.lockCanvas(Rect(destX, destY, width, height))
-
-                    canvas.drawBitmap(bmp, destX.toFloat(), destY.toFloat(), null)
+                    surface.use {
+                        val canvas = it.lockCanvas(Rect(destX, destY, destX + width, destY + height))
+                        try {
+                            canvas.drawBitmap(
+                                bmp,
+                                Rect(srcX, srcY, srcX + width, srcY + height),
+                                Rect(destX, destY, destX + width, destY + height),
+                                null,
+                            )
+                        } finally {
+                            it.unlockCanvasAndPost(canvas)
+                        }
+                    }
+                    result?.success(null)
+                } finally {
                     bmp.recycle()
-
-                    it.unlockCanvasAndPost(canvas)
                 }
-                result?.success(null)
             } catch (e: Exception) {
                 result?.error(PdfRendererException("pdf_renderer", "updateTexture Unknown error", null))
             }
@@ -367,16 +399,16 @@ class Messages(private val binding : FlutterPlugin.FlutterPluginBinding,
         surfaceProducers.remove(id)
     }
 
-    private fun openDataDocument(data: ByteArray): Pair<ParcelFileDescriptor, PdfRenderer> {
+    private fun openDataDocument(data: ByteArray, password: String?): Pair<ParcelFileDescriptor, PdfDocument> {
         val tempDataFile = File(binding.applicationContext.cacheDir, "$randomFilename.pdf")
         if (!tempDataFile.exists()) {
             tempDataFile.writeBytes(data)
         }
         Log.d("pdf_renderer", "OpenDataDocument. Created file: " + tempDataFile.path)
-        return openFileDocument(tempDataFile)
+        return openFileDocument(tempDataFile, password)
     }
 
-    private fun openAssetDocument(assetPath: String): Pair<ParcelFileDescriptor, PdfRenderer> {
+    private fun openAssetDocument(assetPath: String, password: String?): Pair<ParcelFileDescriptor, PdfDocument> {
         val fullAssetPath = binding.flutterAssets.getAssetFilePathByName(assetPath)
         val tempAssetFile = File(binding.applicationContext.cacheDir, "$randomFilename.pdf")
         if (!tempAssetFile.exists()) {
@@ -385,16 +417,23 @@ class Messages(private val binding : FlutterPlugin.FlutterPluginBinding,
             inputStream.close()
         }
         Log.d("pdf_renderer", "OpenAssetDocument. Created file: " + tempAssetFile.path)
-        return openFileDocument(tempAssetFile)
+        return openFileDocument(tempAssetFile, password)
     }
 
-    private fun openFileDocument(file: File): Pair<ParcelFileDescriptor, PdfRenderer> {
+    private fun openFileDocument(file: File, password: String?): Pair<ParcelFileDescriptor, PdfDocument> {
         Log.d("pdf_renderer", "OpenFileDocument. File: " + file.path)
         val fileDescriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-        return if (fileDescriptor != null) {
-            val pdfRenderer = PdfRenderer(fileDescriptor)
-            Pair(fileDescriptor, pdfRenderer)
-        } else throw CreateRendererException()
+        return try {
+            val pdfDocument = pdfium.newDocument(fileDescriptor, password)
+            Pair(fileDescriptor, pdfDocument)
+        } catch (t: Throwable) {
+            // Never leak the fd when pdfium refuses the document.
+            try {
+                fileDescriptor.close()
+            } catch (_: Exception) {
+            }
+            throw t
+        }
     }
 }
 

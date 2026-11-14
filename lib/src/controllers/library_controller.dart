@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:path/path.dart' as p;
 import 'package:pdfx/pdfx.dart';
 
@@ -230,18 +231,104 @@ class LibraryController extends ChangeNotifier {
   }
 
   /// Imports a PDF as a new notebook (one page per PDF page, the PDF as
-  /// page background). Returns null when the file cannot be imported.
-  Future<NotebookEntity?> importPdf(File pdfFile) async {
-    String? relPath;
+  /// page background). Returns a typed result so the UI can tell the
+  /// user exactly WHAT failed — the v2.7.0-era "import just fails with
+  /// a generic error" report.
+  ///
+  /// Pipeline (each stage has its own failure class):
+  ///  1. picked file exists + non-empty        → [PdfImportError.notReadable]
+  ///  2. copy into app storage (streamed)      → [PdfImportError.storage]
+  ///  3. stored copy validated (%PDF header)   → [PdfImportError.notPdf]
+  ///  4. open under a 20 s guard timeout       → [PdfImportError.timeout]
+  ///     (password-protected)                  → [PdfImportError.encrypted]
+  ///     (engine refused the file)             → [PdfImportError.corrupt]
+  ///  5. page count > 0                        → [PdfImportError.corrupt]
+  Future<PdfImportResult> importPdf(File pdfFile) async {
+    // -- 1. The picked file must exist and be non-empty. Some pickers
+    //       hand back a cache path that is already gone, or a zero-byte
+    //       file for cloud providers that failed to stream.
+    try {
+      if (!await pdfFile.exists()) {
+        return const PdfImportResult.failed(PdfImportError.notReadable);
+      }
+      if (await pdfFile.length() == 0) {
+        return const PdfImportResult.failed(PdfImportError.notReadable);
+      }
+    } catch (_) {
+      return const PdfImportResult.failed(PdfImportError.notReadable);
+    }
+
+    // -- 2. Copy into app storage FIRST (streamed — no RAM spike even for
+    //       large PDFs; the pick cache may be reclaimed any moment).
+    String relPath;
     try {
       relPath = await FileStore.importFile(pdfFile, 'pdfs');
+    } catch (_) {
+      return const PdfImportResult.failed(PdfImportError.storage);
+    }
+
+    Future<void> cleanup() async {
+      try {
+        await FileStore.deleteRelative(relPath);
+      } catch (_) {
+        // Best effort.
+      }
+    }
+
+    // -- 3. Validate the stored copy: non-empty + the %PDF signature
+    //       within the first KB (pdfium scans for the header itself, so
+    //       small prefixes of junk are fine — a file with no signature
+    //       near the start is simply not a PDF).
+    try {
       final abs = await FileStore.resolve(relPath);
-      final doc = await PdfDocument.openFile(abs.path);
-      final count = doc.pagesCount;
+      if (await abs.length() == 0) {
+        await cleanup();
+        return const PdfImportResult.failed(PdfImportError.storage);
+      }
+      final raf = await abs.open();
+      try {
+        final head = await raf.read(1024);
+        if (!String.fromCharCodes(head).contains('%PDF')) {
+          await cleanup();
+          return const PdfImportResult.failed(PdfImportError.notPdf);
+        }
+      } finally {
+        await raf.close();
+      }
+    } catch (_) {
+      await cleanup();
+      return const PdfImportResult.failed(PdfImportError.storage);
+    }
+
+    // -- 4. Open with the engine under a guard timeout (a wedged native
+    //       open must fail LOUDLY, not hang the import forever).
+    final absPath = (await FileStore.resolve(relPath)).path;
+    final doc = await _openPdfGuarded(absPath);
+    if (doc == null) {
+      await cleanup();
+      return const PdfImportResult.failed(PdfImportError.corrupt);
+    }
+    if (doc == _timeoutMarker) {
+      await cleanup();
+      return const PdfImportResult.failed(PdfImportError.timeout);
+    }
+    if (doc == _encryptedMarker) {
+      await cleanup();
+      return const PdfImportResult.failed(PdfImportError.encrypted);
+    }
+    final pdfDoc = doc as PdfDocument;
+
+    try {
+      final count = pdfDoc.pagesCount;
+      if (count <= 0) {
+        await pdfDoc.close();
+        await cleanup();
+        return const PdfImportResult.failed(PdfImportError.corrupt);
+      }
       // Pick the page orientation from the first page when possible.
       var pageSize = PageSizeId.a4Portrait.index;
       try {
-        final first = await doc.getPage(1);
+        final first = await pdfDoc.getPage(1);
         final w = first.width;
         final h = first.height;
         await first.close();
@@ -249,7 +336,7 @@ class LibraryController extends ChangeNotifier {
       } catch (_) {
         // Keep the portrait default.
       }
-      await doc.close();
+      await pdfDoc.close();
 
       var title = p.basenameWithoutExtension(pdfFile.path);
       if (title.isEmpty) title = 'PDF';
@@ -276,15 +363,34 @@ class LibraryController extends ChangeNotifier {
         rethrow;
       }
       await reload();
-      return n;
+      return PdfImportResult.ok(n);
     } catch (_) {
-      if (relPath != null) {
-        try {
-          await FileStore.deleteRelative(relPath);
-        } catch (_) {
-          // Best effort cleanup.
-        }
+      await cleanup();
+      return const PdfImportResult.failed(PdfImportError.storage);
+    }
+  }
+
+  /// Sentinel objects for [_openPdfGuarded] (typed null-safety without
+  /// unions in the public API).
+  static const Object _timeoutMarker = 'timeout';
+  static const Object _encryptedMarker = 'encrypted';
+
+  /// Opens a PDF with a 20 s guard. Returns the document, one of the
+  /// [_timeoutMarker]/[_encryptedMarker] sentinels, or null when the
+  /// engine refused the file.
+  static Future<Object?> _openPdfGuarded(String path) async {
+    try {
+      return await PdfDocument.openFile(path)
+          .timeout(const Duration(seconds: 20));
+    } on TimeoutException {
+      return _timeoutMarker;
+    } on PlatformException catch (e) {
+      final m = '${e.code} ${e.message ?? ''}'.toLowerCase();
+      if (m.contains('password') || m.contains('encrypt')) {
+        return _encryptedMarker;
       }
+      return null;
+    } catch (_) {
       return null;
     }
   }
@@ -404,4 +510,48 @@ class LibraryController extends ChangeNotifier {
 
   /// Folder names on the notebook's path joined by "/" (search haystack).
   String _pathNames(int? folderId) => _ancestorNames(folderId).join('/');
+}
+
+// ---------------------------------------------------------------------------
+// PDF import result types
+// ---------------------------------------------------------------------------
+
+/// Why a PDF import failed. The library view maps these to localized
+/// messages (`pdfErr*` strings) so the user always learns the actual
+/// reason instead of a bare "error".
+enum PdfImportError {
+  /// The picked file is missing, unreadable or empty (picker cache
+  /// already reclaimed, cloud stream failed, ...).
+  notReadable,
+
+  /// No `%PDF` signature near the start of the file — not a PDF.
+  notPdf,
+
+  /// The PDF is password-protected; pdfium refuses it without a
+  /// password.
+  encrypted,
+
+  /// The engine refused the file or it has no pages (damaged/empty).
+  corrupt,
+
+  /// The engine did not answer the open within the guard timeout.
+  timeout,
+
+  /// Copying into app storage or creating the notebook failed.
+  storage,
+}
+
+/// Result of [LibraryController.importPdf]: exactly one of [notebook]
+/// (success) or [error] (typed failure reason) is non-null.
+class PdfImportResult {
+  const PdfImportResult._(this.notebook, this.error);
+
+  const PdfImportResult.ok(NotebookEntity notebook) : this._(notebook, null);
+
+  const PdfImportResult.failed(PdfImportError error) : this._(null, error);
+
+  final NotebookEntity? notebook;
+  final PdfImportError? error;
+
+  bool get ok => notebook != null;
 }

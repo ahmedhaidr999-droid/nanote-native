@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
+import 'package:path/path.dart' as p;
 
 import '../../controllers/library_controller.dart';
 import '../../i18n/strings.dart';
@@ -105,17 +106,43 @@ class _LibraryViewState extends State<LibraryView> {
   Future<void> _importPdf() async {
     final c = LibraryController.I;
     final messenger = ScaffoldMessenger.of(context);
+    // withData: cloud/document providers can hand back a content URI whose
+    // cache path is already gone — the bytes are the reliable fallback.
     final res = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['pdf'],
+      withData: true,
     );
     final files = res?.files;
-    final path = (files != null && files.isNotEmpty) ? files.first.path : null;
-    if (path == null || !mounted) return;
-    messenger.showSnackBar(SnackBar(content: Text(S.t('importingPdf'))));
-    final nb = await c.importPdf(File(path));
+    if (files == null || files.isEmpty) return; // picker canceled
+    final f = files.first;
     if (!mounted) return;
-    if (nb != null) {
+
+    // Prefer the streamed path (no RAM spike); write the bytes to a temp
+    // file when the path is missing or dead (SAF/cloud edge cases).
+    final File src;
+    if (f.path != null && File(f.path!).existsSync()) {
+      src = File(f.path!);
+    } else if (f.bytes != null && f.bytes!.isNotEmpty) {
+      try {
+        final tmp = File(p.join(Directory.systemTemp.path,
+            'nanote_pick_${DateTime.now().microsecondsSinceEpoch}.pdf'));
+        await tmp.writeAsBytes(f.bytes!, flush: true);
+        src = tmp;
+      } catch (_) {
+        _showPdfError(messenger, PdfImportError.notReadable);
+        return;
+      }
+    } else {
+      _showPdfError(messenger, PdfImportError.notReadable);
+      return;
+    }
+
+    messenger.showSnackBar(SnackBar(content: Text(S.t('importingPdf'))));
+    final result = await c.importPdf(src);
+    if (!mounted) return;
+    final nb = result.notebook;
+    if (result.ok && nb != null) {
       if (c.section != LibrarySection.all) {
         await c.setSection(LibrarySection.all);
       }
@@ -125,8 +152,23 @@ class _LibraryViewState extends State<LibraryView> {
       await Navigator.pushNamed(context, '/notebook', arguments: nb.id);
       if (mounted) unawaited(c.reload());
     } else {
-      messenger.showSnackBar(SnackBar(content: Text(S.t('error'))));
+      _showPdfError(messenger, result.error);
     }
+  }
+
+  /// Maps a typed PDF-import failure to its localized message — the user
+  /// always learns the actual reason, never a bare "error".
+  void _showPdfError(ScaffoldMessengerState messenger, PdfImportError? error) {
+    final key = switch (error) {
+      PdfImportError.notReadable => 'pdfErrNotReadable',
+      PdfImportError.notPdf => 'pdfErrNotPdf',
+      PdfImportError.encrypted => 'pdfErrEncrypted',
+      PdfImportError.corrupt => 'pdfErrCorrupt',
+      PdfImportError.timeout => 'pdfErrTimeout',
+      PdfImportError.storage => 'pdfErrStorage',
+      _ => 'error',
+    };
+    messenger.showSnackBar(SnackBar(content: Text(S.t(key))));
   }
 
   Future<void> _createFolder() async {

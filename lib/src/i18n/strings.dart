@@ -139,6 +139,12 @@ class S {
     'rootFolder': 'Library',
     'importingPdf': 'Importing PDF…',
     'pdfImported': 'PDF imported',
+    'pdfErrNotReadable': 'The selected file could not be read. Try picking it again.',
+    'pdfErrNotPdf': 'This file is not a valid PDF.',
+    'pdfErrEncrypted': 'This PDF is password-protected and cannot be imported yet.',
+    'pdfErrCorrupt': 'The PDF is damaged or has no pages.',
+    'pdfErrTimeout': 'Opening the PDF took too long. Please try again.',
+    'pdfErrStorage': 'Not enough storage, or a save error occurred while importing the PDF.',
     'folderCreated': 'Folder created',
 
     // templates
@@ -194,7 +200,6 @@ class S {
     'tool.image': 'Image',
     'tool.sticker': 'Stickers',
     'tool.pan': 'Pan',
-    'tool.textSelect': 'Text select',
 
     // editor
     'editor': 'Editor',
@@ -355,10 +360,6 @@ class S {
     'coverageTooLow': 'Too many unknown words for the offline dictionary',
     'askAi': 'Ask AI',
     'copiedToClipboard': 'Copied to clipboard',
-    'searchWeb': 'Search the web',
-    'highlightText': 'Highlight',
-    'underlineText': 'Underline',
-    'selectText': 'Select text',
     'askChatgpt': 'Ask ChatGPT',
     'askGemini': 'Ask Gemini',
     'askClaude': 'Ask Claude',
@@ -437,7 +438,6 @@ class S {
     'reset': 'Reset',
     'showToolbar': 'Show toolbar',
     'hideToolbar': 'Hide toolbar',
-    'textSelectHint': 'Tap any text with this tool to open the translator instantly.',
     'size.infinity': 'Infinite',
     'size.infinityPaper': 'Infinite',
     'size.infinityHint': 'Endless scrolling — the page grows as you write',
@@ -577,6 +577,12 @@ class S {
     'rootFolder': 'المكتبة',
     'importingPdf': 'جارٍ استيراد PDF…',
     'pdfImported': 'تم استيراد PDF',
+    'pdfErrNotReadable': 'تعذّر قراءة الملف المحدد. حاول اختياره مرة أخرى.',
+    'pdfErrNotPdf': 'هذا الملف ليس ملف PDF صالحًا.',
+    'pdfErrEncrypted': 'ملف PDF هذا محمي بكلمة مرور ولا يمكن استيراده حاليًا.',
+    'pdfErrCorrupt': 'ملف PDF تالف أو لا يحتوي على صفحات.',
+    'pdfErrTimeout': 'استغرق فتح ملف PDF وقتًا طويلاً. حاول مرة أخرى.',
+    'pdfErrStorage': 'لا توجد مساحة كافية أو حدث خطأ في الحفظ أثناء استيراد ملف PDF.',
     'folderCreated': 'تم إنشاء المجلد',
 
     // templates
@@ -632,7 +638,6 @@ class S {
     'tool.image': 'صورة',
     'tool.sticker': 'ملصقات',
     'tool.pan': 'تحريك',
-    'tool.textSelect': 'تحديد نص',
 
     // editor
     'editor': 'المحرر',
@@ -794,10 +799,6 @@ class S {
     'coverageTooLow': 'كلمات غير معروفة كثيرة على القاموس دون اتصال',
     'askAi': 'اسأل الذكاء الاصطناعي',
     'copiedToClipboard': 'تم النسخ إلى الحافظة',
-    'searchWeb': 'البحث في الويب',
-    'highlightText': 'تظليل',
-    'underlineText': 'تسطير',
-    'selectText': 'تحديد النص',
     'askChatgpt': 'اسأل ChatGPT',
     'askGemini': 'اسأل Gemini',
     'askClaude': 'اسأل Claude',
@@ -876,7 +877,6 @@ class S {
     'reset': 'إعادة تعيين',
     'showToolbar': 'إظهار الشريط',
     'hideToolbar': 'إخفاء الشريط',
-    'textSelectHint': 'اضغط على أي نص بهذه الأداة لتفتح الترجمة فورًا.',
     'size.infinity': 'لانهائية',
     'size.infinityPaper': 'لانهائية',
     'size.infinityHint': 'تمرير مستمر، تمتد الصفحة أثناء الكتابة',

@@ -14,7 +14,6 @@ enum Tool {
   image,
   sticker,
   pan,
-  textSelect,
 }
 
 extension ToolX on Tool {

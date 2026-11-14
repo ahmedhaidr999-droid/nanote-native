@@ -34,6 +34,16 @@ android {
     namespace = "com.nanote.nanote_native"
     compileSdk = 35
 
+    // Ship native libs exactly as their AARs provide them: skips AGP's
+    // NDK-dependent strip step entirely, so release builds need NO Android
+    // NDK on the machine (the bundled libs — pdfium, isar, flutter engine —
+    // are release-built and already lean).
+    packagingOptions {
+        jniLibs {
+            keepDebugSymbols += '**/*.so'
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -55,6 +65,18 @@ android {
         targetSdk = 35
         versionCode = flutterVersionCode.toInteger()
         versionName = flutterVersionName
+        // pdfium's AAR also ships dead mips/mips64 ABIs — keep the four
+        // ABIs real devices actually use (smaller APK, smaller strip work).
+        ndk {
+            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+        }
+    }
+
+    lint {
+        // Release lint (lintVital) is not part of this project's quality
+        // gate and its analysis database costs significant build time and
+        // disk on constrained machines.
+        checkReleaseBuilds false
     }
 
     signingConfigs {

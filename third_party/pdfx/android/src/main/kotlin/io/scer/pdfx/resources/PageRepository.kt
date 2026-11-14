@@ -1,20 +1,25 @@
 package io.scer.pdfx.resources
 
-import android.annotation.TargetApi
-import android.graphics.pdf.PdfRenderer
-import android.os.Build
+import io.scer.pdfx.document.Document
 import io.scer.pdfx.document.Page
 import io.scer.pdfx.utils.randomID
 
-@TargetApi(Build.VERSION_CODES.LOLLIPOP)
 class PageRepository : Repository<Page>() {
     /**
-     * Register page in repository
-     * @returns page id
+     * Registers a page opened via [Document.openPage] and gives it a
+     * repository id. The returned wrapper keeps the native page loaded
+     * until [close] drops the last reference for its index.
      */
-    fun register(documentId: String, pageRenderer: PdfRenderer.Page): Page {
+    fun register(document: Document, loaded: Document.LoadedPage): Page {
         val id = randomID
-        val page = Page(id, documentId, pageRenderer)
+        val page = Page(
+            id,
+            document.id,
+            document,
+            loaded.index,
+            loaded.width,
+            loaded.height
+        )
         set(id, page)
         return page
     }

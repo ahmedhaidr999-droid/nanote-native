@@ -10,6 +10,69 @@ Full feature parity with the Nanote v1.9.1 web app, rebuilt native.
 <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
+## v2.6.2 — Structure restored + PDFium engine + reliable PDF import
+
+**What happened:** a "clean rebuild" (the abandoned v1.0.0/v2.7.0 line)
+swapped the whole app architecture (Drift instead of Isar, a rewritten
+workspace) when only a color-design change had been asked for, and PDF
+import regressed on top. This release **rolls the tree back to the
+original, battle-tested v2.6.1 architecture** (pdfx + Isar + the
+three-layer engine) and layers the genuinely good parts of the abandoned
+line on top of it — nothing else changed.
+
+**PDF engine — pdfium (Chrome's PDF engine), same pdfx API:**
+- The vendored `third_party/pdfx` Android layer now renders through
+  `com.github.barteksc:pdfium-android` instead of the per-vendor
+  `android.graphics.pdf.PdfRenderer` (several Samsung/MIUI builds ship a
+  broken one that refuses valid files — a real "PDFs don't open" driver).
+- Pages are loaded exactly once (ref-counted), guaranteed loaded before
+  render (pdfium silently renders BLANK for unloaded pages — the
+  gray-page mode), unloaded on last release, bitmaps recycled after every
+  render, annotations rendered (`FPDF_ANNOT`).
+- All v2.6.1 Dart-side hardening is kept: **per-document locks** (a wedge
+  can never poison the whole app again), **idempotent never-throwing
+  closes**, **reply-shape pixel source**, watchdog + memory-aware retry
+  ladder, 1080px raster cap.
+
+**PDF import — typed, explained failures instead of a bare "error":**
+- The picker result is validated (path readable, or bytes fallback for
+  cloud/content-URI providers), the file is copied into app storage
+  FIRST, the stored copy is signature-checked (`%PDF` header), and the
+  engine open runs under a 20 s guard timeout.
+- Every failure is reported with its actual reason (unreadable / not a
+  PDF / password-protected / damaged / timeout / storage) in Arabic and
+  English.
+
+**PDF text selection removed (spec §8, native limitation):** pdfx
+exposes no text layer, and the v2.5.0-era custom extractor (2.8k lines
+parsing raw PDF bytes) was a memory-pressure contributor to the very OOM
+class that grayed pages out. Nanote ships without PDF text selection and
+leaves a **clean extension point**: `GestureRouter.onPdfLongPress`
+receives every long-press on a rendered PDF page already resolved to
+(pageId, pageNumber, screen point) — a future text-capable engine plugs
+in there with zero gesture-router changes.
+
+**Build:** no NDK needed (native libs shipped as-is), dead mips/mips64
+ABIs filtered out, release lint off — matching the only configuration
+that produced a green signed APK on CI.
+
+## v2.6.1 — Real E2E diagnosis of "only page 1 renders"
+
+The v2.6.0 analysis was refined against the REAL production pipeline
+(tiles → controller → Pigeon channel → native) with E2E tests instead of
+platform fakes. Root causes: (1) upstream pdfx serialized EVERY call
+app-wide through one global lock — a single never-completing call held it
+forever, so after a wedge even a reopened document queued eternally
+behind the poisoned lock; (2) `close()` threw on double-close and marked
+the doc closed before the native call — one failed native close leaked
+the renderer and broke every later close; (3) the render pixel source
+was chosen by host platform instead of the reply's shape; (4) OOM retries
+looped at the same raster size forever on mid-RAM devices. Fixes:
+per-document locks, idempotent closes, reply-shape pixel choice, a
+memory-aware retry ladder (1440→1080→720→540→405 px per page after
+consecutive failures), wedge-recovery budget resets, and pipeline
+debug logging. 24 tests green including 3 new E2E ones.
+
 ## v2.6.0 — "Only page 1 renders, pages 2+ stay gray" — root cause fixed
 
 **The bug:** after the v2.5.2 gray-screen fix, PDFs opened showing ONLY the
@@ -295,9 +358,11 @@ around the opposite corner / rotate around the center; the PDF settle timer
 a single in-flight page (Android requirement).
 
 > **PDF text layer note:** `pdfx` cannot extract text, so PDF text selection
-> is intentionally not faked. A clean extension point exists in
-> `PdfDocumentController` — swap in a text-extracting implementation (e.g.
-> `pdfrx`) if needed.
+> is intentionally not faked. A clean extension point exists:
+> `GestureRouter.onPdfLongPress` receives every long-press on a rendered
+> PDF page already resolved to (pageId, 1-based pageNumber, screen point).
+> A future text-extracting engine (e.g. `pdfrx`) attaches there with zero
+> gesture-router changes.
 
 ## Building locally
 

@@ -152,8 +152,6 @@ class ToolSettingsPanel extends StatelessWidget {
         return _hintBody(context, 'stickerHint');
       case Tool.pan:
         return _hintBody(context, 'panHint');
-      case Tool.textSelect:
-        return _hintBody(context, 'textSelectHint');
     }
   }
 

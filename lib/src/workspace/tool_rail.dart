@@ -104,7 +104,6 @@ class ToolRail extends StatefulWidget {
     Tool.eraser: LucideIcons.eraser,
     Tool.lasso: LucideIcons.lasso,
     Tool.text: LucideIcons.type,
-    Tool.textSelect: LucideIcons.text_cursor_input,
     Tool.shape: LucideIcons.shapes,
     Tool.image: LucideIcons.image,
     Tool.sticker: LucideIcons.sticker,
@@ -245,7 +244,6 @@ class _ToolRailState extends State<ToolRail> {
   /// §1 fixed tool order — group B (content).
   static const List<Tool> _groupB = [
     Tool.text,
-    Tool.textSelect,
     Tool.shape,
     Tool.image,
     Tool.sticker,

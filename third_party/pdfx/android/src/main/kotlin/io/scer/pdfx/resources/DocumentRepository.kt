@@ -1,22 +1,20 @@
 package io.scer.pdfx.resources
 
-import android.annotation.TargetApi
-import android.graphics.pdf.PdfRenderer
-import android.os.Build
 import android.os.ParcelFileDescriptor
+import com.shockwave.pdfium.PdfDocument
+import com.shockwave.pdfium.PdfiumCore
 import io.scer.pdfx.document.Document
 import io.scer.pdfx.utils.randomID
 
-@TargetApi(Build.VERSION_CODES.LOLLIPOP)
 class DocumentRepository : Repository<Document>() {
     /**
-     * Register document in repository
+     * Register an opened pdfium document in the repository.
      * @returns document id
      */
-    fun register(getPair: Pair<ParcelFileDescriptor, PdfRenderer>?): Document {
+    fun register(getPair: Pair<ParcelFileDescriptor, PdfDocument>?, core: PdfiumCore): Document {
         val id = randomID
-        val (fileDescriptor, renderer) = getPair!!
-        val document = Document(id, renderer, fileDescriptor)
+        val (fileDescriptor, pdfDocument) = getPair!!
+        val document = Document(id, core, pdfDocument, fileDescriptor)
         set(id, document)
         return document
     }

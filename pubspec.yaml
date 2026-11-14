@@ -1,7 +1,7 @@
 name: nanote_native
-description: "Nanote Native — local-first handwriting notes app (Flutter, Android)."
+description: "Nanote Native — local-first handwriting notes app (Flutter, Android). pdfx (pdfium engine) + Isar."
 publish_to: "none"
-version: 2.6.0+1
+version: 2.6.2+1
 
 environment:
   sdk: ">=3.5.0 <4.0.0"

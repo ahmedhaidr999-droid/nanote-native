@@ -345,7 +345,6 @@ class ToolController extends ChangeNotifier {
       case Tool.image:
       case Tool.sticker:
       case Tool.pan:
-      case Tool.textSelect:
         return StrokeKind.fountain;
     }
   }

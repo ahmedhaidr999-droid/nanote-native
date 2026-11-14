@@ -1,23 +1,35 @@
 package io.scer.pdfx.document
 
-import android.annotation.TargetApi
 import android.graphics.Bitmap
-import android.graphics.pdf.PdfRenderer
-import android.os.Build
 import io.scer.pdfx.utils.toFile
 import java.io.File
 
-@TargetApi(Build.VERSION_CODES.LOLLIPOP)
+/**
+ * A pdfium-backed page wrapper.
+ *
+ * The native FPDF page is loaded while this wrapper (or any sibling
+ * wrapper for the same index) is alive — the owning [Document]
+ * ref-counts loads. [close] releases the wrapper and unloads the page
+ * when it was the last one, mirroring the old engine's tight page
+ * lifecycle instead of leaking native memory.
+ *
+ * v2.7.0 note: the bitmap is now RECYCLED after every render — the old
+ * implementation never recycled, which contributed to the memory pressure
+ * behind the v2.5.x OOM class of failures.
+ */
 class Page(
     val id: String,
-    private val documentId: String,
-    val pageRenderer: PdfRenderer.Page
-    ) {
-    /** Page number in document */
-    private val number: Int get() = pageRenderer.index
-
-    val width: Int get() = pageRenderer.width
-    val height: Int get() = pageRenderer.height
+    val documentId: String,
+    private val document: Document,
+    private val pageIndex: Int,
+    val width: Int,
+    val height: Int
+) {
+    /**
+     * 0-based page index — matches the old PdfRenderer.Page.getIndex()
+     * value that was reported as "pageNumber" to Dart (behavior parity).
+     */
+    private val number: Int get() = pageIndex
 
     val infoMap: Map<String, Any>
         get() =
@@ -30,34 +42,58 @@ class Page(
             )
 
     fun close() {
-        pageRenderer.close()
+        document.releasePage(pageIndex)
     }
 
-    fun render(file: File, width: Int, height: Int, background: Int, format: Int, crop: Boolean, cropX: Int, cropY: Int, cropW: Int, cropH: Int, quality: Int, forPrint: Boolean): Data {
+    fun render(
+        file: File,
+        width: Int,
+        height: Int,
+        background: Int,
+        format: Int,
+        crop: Boolean,
+        cropX: Int,
+        cropY: Int,
+        cropW: Int,
+        cropH: Int,
+        quality: Int,
+        @Suppress("UNUSED_PARAMETER") forPrint: Boolean
+    ): Data {
         val bitmap = Bitmap.createBitmap(
             width,
             height,
             Bitmap.Config.ARGB_8888)
-        bitmap.eraseColor(background)
-        val mode = if (forPrint) PdfRenderer.Page.RENDER_MODE_FOR_PRINT else PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY
-        pageRenderer.render(bitmap, null, null, mode)
+        try {
+            bitmap.eraseColor(background)
+            // Full-page raster at exactly the requested size. The native
+            // page is guaranteed loaded (openPage ran before this wrapper
+            // was created), so this call cannot hit pdfium's silent
+            // "page not loaded -> blank bitmap" path. Annotations are
+            // rendered (true) — the same content desktop viewers show.
+            document.renderPage(pageIndex, bitmap, width, height)
 
-
-        if (crop && (cropW != width || cropH != height)) {
-            val cropped = Bitmap.createBitmap(bitmap, cropX, cropY, cropW, cropH)
-            cropped.toFile(file, format, quality)
-            return Data(
-                cropW,
-                cropH,
-                file.absolutePath
-            )
-        } else {
-            bitmap.toFile(file, format, quality)
-            return Data(
-                width,
-                height,
-                file.absolutePath
-            )
+            if (crop && (cropW != width || cropH != height)) {
+                val cropped = Bitmap.createBitmap(bitmap, cropX, cropY, cropW, cropH)
+                try {
+                    cropped.toFile(file, format, quality)
+                    return Data(
+                        cropW,
+                        cropH,
+                        file.absolutePath
+                    )
+                } finally {
+                    cropped.recycle()
+                }
+            } else {
+                bitmap.toFile(file, format, quality)
+                return Data(
+                    width,
+                    height,
+                    file.absolutePath
+                )
+            }
+        } finally {
+            bitmap.recycle()
         }
     }
 

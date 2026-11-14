@@ -4,6 +4,10 @@ version '1.0-SNAPSHOT'
 buildscript {
     ext.kotlin_version = '1.9.23'
     repositories {
+        // Google's official Maven Central mirror first — same bytes as
+        // repo.maven.apache.org, far more forgiving rate limits (builds
+        // on rate-limited CI/sandboxes keep working).
+        maven { url 'https://maven-central.storage-download.googleapis.com/maven2' }
         google()
         mavenCentral()
     }
@@ -45,7 +49,12 @@ android {
     }
 
     defaultConfig {
-        minSdkVersion 16
+        // pdfium-android native libs require API 17+ (the app itself has
+        // minSdk 23, so this only documents the library floor).
+        minSdkVersion 17
+        // Keep pdfium classes intact even if the consuming app enables
+        // shrinking — the page-unloader talks to the binding reflectively.
+        consumerProguardFiles 'consumer-rules.pro'
     }
 
     compileOptions {
@@ -63,4 +72,22 @@ android {
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+
+    // v2.7.0 PDF ENGINE: pdfium — Google Chrome's PDF engine — replaces
+    // android.graphics.pdf.PdfRenderer. The system renderer is
+    // vendor-dependent (several Samsung/MIUI builds fail on valid files)
+    // and rejects a wide range of normal PDFs; pdfium behaves identically
+    // on every device, repairs damaged files and powers Chrome/Drive.
+    // Same engine class professional annotation apps (Notewise & co.)
+    // render with. Bundles native libs for armeabi-v7a, arm64-v8a, x86,
+    // x86_64 (+mips) from Maven Central.
+    //
+    // The POM drags in the LEGACY com.android.support:support-v4, whose
+    // classes clash with AndroidX (checkReleaseDuplicateClasses). Excluded
+    // here; the single support class the binding's bytecode references
+    // (android.support.v4.util.ArrayMap in PdfDocument) is provided by the
+    // drop-in shim in src/main/kotlin/android/support/v4/util/ArrayMap.kt.
+    implementation("com.github.barteksc:pdfium-android:1.9.0") {
+        exclude group: 'com.android.support'
+    }
 }
